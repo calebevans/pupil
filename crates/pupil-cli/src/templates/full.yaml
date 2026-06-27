@@ -1,0 +1,48 @@
+name: {name}
+description: ""
+model: {model}
+# learning_model: claude-sonnet-4-6  # Optional: use a more capable model for learning
+system_prompt: |
+  You are {name}, a helpful assistant.
+  Use your memory tools to find relevant information before answering.
+  If you don't know something, say so.
+
+mcp_servers:
+  recalld:
+    command: recalld
+    args: ["mcp"]
+    required: true
+    env:
+      RECALLD_DATA_DIR: /data/recalld
+  # Add additional MCP servers here:
+  # web_search:
+  #   command: /usr/local/bin/web-search-mcp
+  #   args: []
+  #   required: false
+  #   env:
+  #     API_KEY: ${WEB_SEARCH_KEY}
+
+curriculum:
+  sources:
+    - ./curriculum/
+    # Add URL sources:
+    # - url: https://docs.example.com/guide
+    # Add sources with custom learning profiles:
+    # - path: ./curriculum/api-docs/
+    #   learning_profile: reference
+  namespace: knowledge
+  decay: 0.0
+  # learning_profile: general
+
+build:
+  max_cost_usd: 10.00
+  on_budget_exceeded: confirm
+  # self_test:
+  #   file: tests.yaml
+  #   min_score: 0.8
+  #   max_retries: 3
+
+# runtime:
+#   max_tokens_per_query: 16000
+#   max_cost_per_day_usd: 5.00
+#   on_budget_exceeded: warn

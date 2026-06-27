@@ -1,0 +1,22 @@
+name: {name}
+description: "Conversational chatbot"
+model: {model}
+system_prompt: |
+  You are {name}, a conversational assistant.
+  Be friendly, helpful, and concise.
+  Use your memories to provide context-aware responses.
+  If you learn something new from the user, store it for future reference.
+
+mcp_servers:
+  recalld:
+    command: recalld
+    args: ["mcp"]
+    required: true
+    env:
+      RECALLD_DATA_DIR: /data/recalld
+
+curriculum:
+  sources:
+    - ./curriculum/
+  namespace: knowledge
+  decay: 0.0

@@ -1,0 +1,21 @@
+name: {name}
+description: ""
+model: {model}
+system_prompt: |
+  You are {name}, a helpful assistant.
+  Use your memory tools to find relevant information before answering.
+  If you don't know something, say so.
+
+mcp_servers:
+  recalld:
+    command: recalld
+    args: ["mcp"]
+    required: true
+    env:
+      RECALLD_DATA_DIR: /data/recalld
+
+curriculum:
+  sources:
+    - ./curriculum/
+  namespace: knowledge
+  decay: 0.0

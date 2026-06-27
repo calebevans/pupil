@@ -1,0 +1,27 @@
+name: {name}
+description: "Knowledge base assistant"
+model: {model}
+system_prompt: |
+  You are {name}, a knowledge base assistant.
+  Always search your memories before answering questions.
+  Ground your answers in retrieved knowledge.
+  If you cannot find relevant information, say so clearly.
+
+mcp_servers:
+  recalld:
+    command: recalld
+    args: ["mcp"]
+    required: true
+    env:
+      RECALLD_DATA_DIR: /data/recalld
+
+curriculum:
+  sources:
+    - ./curriculum/
+  namespace: knowledge
+  decay: 0.0
+  learning_profile: general
+
+build:
+  max_cost_usd: 10.00
+  on_budget_exceeded: confirm
