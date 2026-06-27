@@ -1,0 +1,13 @@
+Extract every distinct item from this reference material as its own memory. Items include: API endpoints, CLI commands, configuration options, parameters, flags, error codes, status codes, and constants.
+
+For each item, capture:
+- Name and full path (e.g., "POST /api/v2/users/{id}/roles")
+- All parameters with their types, defaults, and constraints
+- Return type or response shape
+- Error cases and their codes/messages
+- Required vs optional fields
+- Any usage examples provided
+
+Be exhaustive. Missing an endpoint or parameter is worse than creating too many memories. When in doubt, store it as a separate memory.
+
+Tag each memory with type/reference and include the item category (e.g., endpoint, option, error-code) in the tags.

@@ -1,0 +1,17 @@
+Focus on architectural decisions, design rationale, and conceptual relationships. For every decision or design choice described:
+
+- Store the decision itself as the summary
+- Include the full rationale, tradeoffs, and alternatives in fullText
+- Capture what was considered and rejected, and why
+- Note constraints that drove the decision
+- Link related decisions using parentId
+
+For component descriptions:
+- Store each component/system as its own memory
+- Capture responsibilities, boundaries, and interfaces
+- Note dependencies and communication patterns between components
+- Record any scaling, performance, or reliability characteristics
+
+Do not just summarize. The reasoning behind decisions is often more valuable than the decisions themselves.
+
+Tag memories with type/concept or type/decision as appropriate.

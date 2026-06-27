@@ -1,0 +1,11 @@
+This is policy or compliance content where exact wording matters.
+
+- For definitions, obligations, thresholds, deadlines, and scope statements: store the verbatim text in fullText. Do not paraphrase legal or compliance language.
+- Use a clear, searchable summary that describes what the policy covers, then preserve the exact language in fullText.
+- Capture effective dates, review dates, and applicability scope
+- Note who the policy applies to (roles, teams, systems)
+- Tag with type/policy and the relevant domain (e.g., security, privacy, data-retention, incident-response)
+
+If the document has a definitions section, store each defined term as its own memory with the verbatim definition.
+
+Accuracy over brevity. When a number, date, or threshold appears in the text, it must appear unchanged in the memory.

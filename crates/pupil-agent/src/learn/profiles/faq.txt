@@ -1,0 +1,15 @@
+Store each question-answer pair as an individual memory.
+
+- Use the question (or a natural rephrasing of it) as the summary. Summaries should read like something a user would search for.
+- Store the full answer as fullText
+- If the answer references other questions, link them with parentId
+- Group related questions under a shared parent memory for the topic
+- Capture troubleshooting steps with their symptoms and solutions
+
+For troubleshooting content:
+- The symptom/error message is the summary (this is what users search)
+- The diagnosis and fix are the fullText
+- Tag with type/troubleshooting
+
+For general Q&A:
+- Tag with type/faq

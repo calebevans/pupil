@@ -1,0 +1,19 @@
+Extract developer-facing knowledge from this code documentation.
+
+For each function, method, class, or module documented:
+- Store the signature and purpose as the summary
+- Include usage examples, parameter descriptions, and return values in fullText
+- Capture gotchas, edge cases, and common mistakes
+- Note deprecation warnings and migration paths
+- Record version-specific behavior differences
+
+For changelogs and release notes:
+- Store breaking changes as individual memories
+- Group minor changes into summary memories per version
+- Tag breaking changes with type/breaking-change
+
+For README/getting-started content:
+- Treat setup instructions as procedural (see procedural profile)
+- Store configuration options as reference items
+
+Tag memories with type/code and include the relevant module or package name in entities.

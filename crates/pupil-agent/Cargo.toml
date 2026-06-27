@@ -1,0 +1,109 @@
+[package]
+name = "pupil-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "pupil-agent"
+path = "src/main.rs"
+
+[features]
+default = ["genai-provider", "learn"]
+genai-provider = ["dep:genai"]
+learn = [
+    "dep:pulldown-cmark",
+    "dep:pdf-extract",
+    "dep:scraper",
+    "dep:readability-rust",
+    "dep:sha2",
+    "dep:hex",
+]
+bedrock = ["dep:aws-sdk-bedrockruntime", "dep:aws-config"]
+azure = ["dep:azure_identity"]
+
+[dependencies]
+# --- MCP client ---
+rmcp = { version = "1.8", features = ["client", "transport-child-process", "schemars"] }
+
+# --- LLM providers ---
+genai = { version = "0.6", optional = true }
+async-openai = { version = "0.36", features = ["chat-completion"] }
+
+# --- Async runtime ---
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
+tokio-stream = "0.1"
+
+# --- HTTP ---
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest-eventsource = "0.6"
+
+# --- Web server ---
+axum = { version = "0.8", features = ["json"] }
+tower-http = { version = "0.6", features = ["cors"] }
+
+# --- Serialization ---
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+
+# --- CLI parsing ---
+clap = { workspace = true }
+
+# --- Logging ---
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# --- Identifiers ---
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# --- Concurrency ---
+dashmap = "6"
+
+# --- Async utilities ---
+futures = "0.3"
+async-trait = "0.1"
+pin-project-lite = "0.2"
+
+# --- Process group isolation for MCP servers ---
+process-wrap = { version = "9", features = ["tokio1", "process-group"] }
+
+# --- Pattern matching ---
+regex = "1"
+
+# --- Error handling ---
+thiserror = "2"
+anyhow = "1"
+
+# --- Security ---
+secrecy = { version = "0.10", features = ["serde"] }
+
+# --- Retry ---
+backoff = { version = "0.4", features = ["tokio"] }
+
+# --- Encoding ---
+base64 = "0.22"
+
+# --- Learning dependencies (behind `learn` feature flag) ---
+pulldown-cmark = { version = "0.13", optional = true }
+pdf-extract = { version = "0.10", optional = true }
+scraper = { version = "0.27", optional = true }
+readability-rust = { version = "0.1", optional = true }
+sha2 = { version = "0.10", optional = true }
+hex = { version = "0.4", optional = true }
+
+# --- Cloud provider backends (optional feature flags) ---
+aws-sdk-bedrockruntime = { version = "1", optional = true }
+aws-config = { version = "1", optional = true }
+azure_identity = { version = "0.22", optional = true }
+
+# --- Allocator (musl targets) ---
+
+[target.'cfg(target_env = "musl")'.dependencies]
+tikv-jemallocator = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

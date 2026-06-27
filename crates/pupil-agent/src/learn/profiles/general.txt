@@ -1,0 +1,13 @@
+Read carefully. Understand the material before storing anything.
+
+Store insights, not transcriptions. A memory should capture a concept, fact, procedure, or relationship in your own words.
+
+Create as many or as few memories as the material warrants. Dense technical content deserves many focused memories. Simple overviews need fewer, broader ones.
+
+Write summaries that are specific and searchable. Someone will search for these later by asking natural language questions.
+
+Include entities (people, tools, systems, proper nouns), topics (lowercase keywords), and tags (hierarchical: source/{source_file}, type/<concept|procedure|reference|definition|relationship>).
+
+Before storing, use recall_memories to check if you already know something similar. Use supersedes to replace outdated knowledge. Use find_similar_memories to avoid duplicates.
+
+Link related memories. If this material references something you already stored, use parentId to create the connection.

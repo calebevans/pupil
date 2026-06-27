@@ -1,0 +1,13 @@
+Focus on procedures, workflows, and step-by-step processes. Store each procedure as one coherent memory, not one memory per step.
+
+For each procedure, capture:
+- What the procedure accomplishes (as the summary)
+- Prerequisites and required access/permissions
+- The ordered steps
+- Expected outcomes and how to verify success
+- Common failure modes and how to recover
+- Links to related procedures (use parentId)
+
+If a document describes multiple procedures, store each one separately. Capture the relationships between procedures (e.g., "Run procedure A before procedure B"). Pay attention to warnings, cautions, and notes embedded in the steps.
+
+Tag memories with type/procedure.
