@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pupil-cli",
+    "crates/pupil-agent",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+repository = "https://github.com/calebevans/pupil"
+rust-version = "1.85"
+
+# Shared dependency versions pinned at workspace level.
+# Crates reference these with `workspace = true`.
+[workspace.dependencies]
+# --- Async runtime ---
+tokio = { version = "1", features = ["full"] }
+
+# --- Serialization ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+
+# --- CLI ---
+clap = { version = "4", features = ["derive", "env"] }
+
+# --- Logging ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "time"] }
+
+# --- Allocator ---
+tikv-jemallocator = "0.6"
+
+[profile.release]
+opt-level = "z"       # optimize for size
+lto = true            # link-time optimization (full)
+codegen-units = 1     # single codegen unit for maximum optimization
+panic = "abort"       # no unwinding, smaller binary
+strip = "symbols"     # strip debug symbols from the binary

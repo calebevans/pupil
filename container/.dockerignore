@@ -1,0 +1,35 @@
+# Version control
+.git
+.gitignore
+
+# Rust build artifacts (built inside the container, not from host)
+target/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Spec and design docs (not needed in image)
+spec/
+DESIGN.md
+GLOSSARY.md
+README.md
+LICENSE
+
+# Example agent projects (built separately)
+examples/
+
+# Docker context recursion
+container/
+
+# Test fixtures
+tests/
+
+# CI config
+.github/
+.gitlab-ci.yml
+.circleci/
