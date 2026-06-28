@@ -72,6 +72,7 @@ pub async fn execute(args: BuildArgs) -> Result<(), CliError> {
     let start_time = Instant::now();
 
     let (agent_dir, config) = resolve_agent(args.name.as_deref())?;
+    let agent_dir = agent_dir.canonicalize().map_err(|e| CliError::Io(e))?;
     let curriculum_dir = agent_dir.join("curriculum");
 
     let runtime = detect_or_override_runtime(args.runtime.as_deref()).await?;

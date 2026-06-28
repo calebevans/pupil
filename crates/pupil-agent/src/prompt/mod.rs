@@ -1,4 +1,4 @@
-use crate::llm::ToolDefinition;
+use crate::llm::{ResponseSchema, ToolDefinition};
 
 pub struct SystemPromptBuilder {
     name: String,
@@ -7,6 +7,8 @@ pub struct SystemPromptBuilder {
     tools: Vec<ToolDefinition>,
     peers: Vec<PeerAgent>,
     namespace: String,
+    collaboration_enabled: bool,
+    response_schema: Option<ResponseSchema>,
 }
 
 pub struct PeerAgent {
@@ -49,11 +51,23 @@ impl SystemPromptBuilder {
             tools,
             peers: Vec::new(),
             namespace,
+            collaboration_enabled: false,
+            response_schema: None,
         }
     }
 
     pub fn with_peers(mut self, peers: Vec<PeerAgent>) -> Self {
         self.peers = peers;
+        self
+    }
+
+    pub fn with_collaboration(mut self, enabled: bool) -> Self {
+        self.collaboration_enabled = enabled;
+        self
+    }
+
+    pub fn with_response_schema(mut self, schema: &ResponseSchema) -> Self {
+        self.response_schema = Some(schema.clone());
         self
     }
 
@@ -88,19 +102,55 @@ impl SystemPromptBuilder {
         }
 
         if !self.peers.is_empty() {
-            prompt.push_str("\n\n## Other Available Agents\n");
-            prompt.push_str(
-                "If the user's question involves a domain outside \
-                 your expertise, suggest they ask one of these \
-                 specialized agents:\n",
-            );
-            for peer in &self.peers {
-                prompt.push_str(&format!("- {}: {}\n", peer.name, peer.description));
+            if self.collaboration_enabled {
+                prompt.push_str("\n\n## Available Agents\n\n");
+                prompt.push_str(
+                    "You can delegate questions to the following agents \
+                     using the `ask_agent` tool:\n\n",
+                );
+                for peer in &self.peers {
+                    if peer.description.is_empty() {
+                        prompt.push_str(&format!("- **{}**\n", peer.name));
+                    } else {
+                        prompt.push_str(&format!(
+                            "- **{}**: {}\n",
+                            peer.name, peer.description
+                        ));
+                    }
+                }
+                prompt.push_str(
+                    "\nOnly use ask_agent when the question genuinely \
+                     falls outside your expertise. Provide a \
+                     self-contained question with all necessary context, \
+                     as the other agent cannot see your conversation \
+                     history.",
+                );
+            } else {
+                prompt.push_str("\n\n## Other Available Agents\n");
+                prompt.push_str(
+                    "If the user's question involves a domain outside \
+                     your expertise, suggest they ask one of these \
+                     specialized agents:\n",
+                );
+                for peer in &self.peers {
+                    prompt.push_str(&format!("- {}: {}\n", peer.name, peer.description));
+                }
             }
         }
 
         prompt.push_str("\n\n## Response Guidelines\n");
         prompt.push_str(RESPONSE_GUIDELINES);
+
+        if let Some(ref schema) = self.response_schema {
+            prompt.push_str("\n\n## Response Format\n\n");
+            prompt.push_str("Always respond with a JSON object matching this schema:\n");
+            if let Ok(pretty) = serde_json::to_string_pretty(&schema.schema) {
+                prompt.push_str(&pretty);
+            } else {
+                prompt.push_str(&schema.schema.to_string());
+            }
+            prompt.push_str("\n\nDo not include any text outside the JSON object.");
+        }
 
         prompt
     }

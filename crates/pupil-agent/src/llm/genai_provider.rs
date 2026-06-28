@@ -112,6 +112,8 @@ fn convert_tools(tools: &[ToolDefinition]) -> Vec<GenaiTool> {
 }
 
 fn convert_chat_options(config: &ChatConfig) -> GenaiChatOptions {
+    use genai::chat::{ChatResponseFormat, JsonSpec};
+
     let mut opts = GenaiChatOptions::default()
         .with_capture_usage(true)
         .with_capture_content(true)
@@ -128,6 +130,23 @@ fn convert_chat_options(config: &ChatConfig) -> GenaiChatOptions {
     }
     if !config.stop_sequences.is_empty() {
         opts = opts.with_stop_sequences(config.stop_sequences.clone());
+    }
+
+    if let Some(ref rs) = config.response_schema {
+        let mut spec = JsonSpec::new(rs.name.clone(), rs.schema.clone());
+        if let Some(ref desc) = rs.description {
+            spec = spec.with_description(desc.clone());
+        }
+        if rs.strict {
+            let strict_schema = spec.schema_with_additional_properties_false();
+            spec = JsonSpec::new(rs.name.clone(), strict_schema);
+            if let Some(ref desc) = rs.description {
+                spec = spec.with_description(desc.clone());
+            }
+        }
+        opts = opts.with_response_format(ChatResponseFormat::JsonSpec(spec));
+    } else if config.json_mode {
+        opts = opts.with_response_format(ChatResponseFormat::JsonMode);
     }
 
     opts

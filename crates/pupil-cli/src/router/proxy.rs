@@ -10,6 +10,7 @@ pub struct RouterState {
     pub engine: Arc<RoutingEngine>,
     pub affinity: Arc<SessionAffinityMap>,
     pub http_client: reqwest::Client,
+    pub max_inter_agent_depth: u32,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -50,6 +51,29 @@ pub async fn handle_chat_completion(
             .into_response();
     }
 
+    if let Some(depth_str) = headers.get("x-pupil-depth").and_then(|v| v.to_str().ok()) {
+        if let Ok(depth) = depth_str.parse::<u32>() {
+            if depth > state.max_inter_agent_depth {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    axum::Json(serde_json::json!({
+                        "error": "depth_limit_exceeded",
+                        "message": format!(
+                            "Inter-agent depth {} exceeds router limit {}",
+                            depth, state.max_inter_agent_depth
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    let forced_target = headers
+        .get("x-pupil-target-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     let session_id = extract_session_id(&headers);
     let reroute = headers
         .get("x-pupil-reroute")
@@ -57,7 +81,14 @@ pub async fn handle_chat_completion(
         .map(|v| v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    let target_agent = if reroute {
+    let target_agent = if let Some(ref forced) = forced_target {
+        state
+            .engine
+            .registry
+            .get_agent(forced)
+            .filter(|a| a.is_healthy())
+            .map(|_| forced.clone())
+    } else if reroute {
         if let Some(ref sid) = session_id {
             state.affinity.remove(sid);
         }
@@ -150,7 +181,17 @@ pub async fn handle_chat_completion(
     }
 
     let proxy_start = std::time::Instant::now();
-    let proxy_result = state.http_client.post(&target_url).json(&body_map).send().await;
+    let mut proxy_request = state.http_client.post(&target_url).json(&body_map);
+
+    for header_name in &["x-pupil-depth", "x-pupil-chain", "x-pupil-source"] {
+        if let Some(val) = headers.get(*header_name) {
+            if let Ok(val_str) = val.to_str() {
+                proxy_request = proxy_request.header(*header_name, val_str);
+            }
+        }
+    }
+
+    let proxy_result = proxy_request.send().await;
 
     match proxy_result {
         Ok(resp) => {

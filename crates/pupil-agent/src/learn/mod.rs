@@ -349,6 +349,7 @@ async fn process_source(
     let mut learning_prompt = prompt::build_learning_prompt(
         resolved_source,
         curriculum_learning_profile,
+        config.learning_prompt.as_deref(),
         &vars,
     );
 
@@ -359,7 +360,23 @@ async fn process_source(
     let prompt_hash = sha256_hex(learning_prompt.as_bytes());
 
     // Extract content (needed for content hash)
-    let extracted = extract::extract(resolved_source).await?;
+    let extracted = match extract::extract(resolved_source).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(
+                source = %source_key,
+                error = %e,
+                "Unable to process source, skipping"
+            );
+            return Ok(SourceLearnResult {
+                source_key: source_key.clone(),
+                action: LearnAction::Skipped,
+                memories_created: 0,
+                memories_forgotten: 0,
+                memory_ids: vec![],
+            });
+        }
+    };
     let content_hash = sha256_hex(&extracted.raw_bytes);
 
     // Check manifest for skip (unless force_relearn is set)

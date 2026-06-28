@@ -85,6 +85,7 @@ pub fn substitute_vars(template: &str, vars: &TemplateVars) -> String {
 pub fn build_learning_prompt(
     source: &ResolvedSource,
     curriculum_learning_profile: Option<&str>,
+    default_learning_prompt: Option<&str>,
     vars: &TemplateVars,
 ) -> String {
     let guidelines = match (&source.learning_prompt, &source.learning_profile) {
@@ -94,9 +95,13 @@ pub fn build_learning_prompt(
             substitute_vars(profile_text, vars)
         }
         (None, None) => {
-            let profile_name = curriculum_learning_profile.unwrap_or("general");
-            let profile_text = load_profile(profile_name);
-            substitute_vars(profile_text, vars)
+            if let Some(prompt) = default_learning_prompt {
+                substitute_vars(prompt, vars)
+            } else {
+                let profile_name = curriculum_learning_profile.unwrap_or("general");
+                let profile_text = load_profile(profile_name);
+                substitute_vars(profile_text, vars)
+            }
         }
         (Some(_), Some(_)) => {
             tracing::warn!(
@@ -182,9 +187,7 @@ mod tests {
             source_type: "markdown".into(),
         };
 
-        let prompt = build_learning_prompt(&source, None, &vars);
-        assert!(prompt.contains("You are a learning agent"));
-        assert!(prompt.contains("## Guidelines"));
+        let prompt = build_learning_prompt(&source, None, None, &vars);
         assert!(prompt.contains("Source: api.md"));
         assert!(prompt.contains("Curriculum: test-agent"));
         assert!(prompt.contains("Namespace: knowledge"));

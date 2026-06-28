@@ -1427,6 +1427,8 @@ async fn start_test_container(
     runtime: &dyn ContainerRuntime,
     image: &str,
     config: &AgentConfig,
+    agent_dir: &Path,
+    test_file_path: &Path,
 ) -> Result<container::ContainerId, CliError> {
     let (key_name, key_set) = resolve_api_key(&config.model);
     let mut env_vars = HashMap::new();
@@ -1441,6 +1443,7 @@ async fn start_test_container(
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
         "VERTEX_PROJECT_ID",
         "VERTEX_LOCATION",
         "VERTEX_API_KEY",
@@ -1452,17 +1455,36 @@ async fn start_test_container(
         }
     }
 
+    // Forward Ollama host for embeddings
+    env_vars.insert(
+        "OLLAMA_BASE_URL".to_string(),
+        std::env::var("OLLAMA_BASE_URL")
+            .unwrap_or_else(|_| "http://host.docker.internal:11434".to_string()),
+    );
+
+    let config_path = agent_dir.join("pupil.yaml").canonicalize().map_err(|e| {
+        CliError::Io(e)
+    })?;
+    let test_path = test_file_path.canonicalize().map_err(|e| {
+        CliError::Io(e)
+    })?;
+
     let opts = RunOptions {
-        read_only: true,
-        tmpfs: vec!["/tmp".to_string()],
-        volumes: vec![],
-        cap_drop_all: true,
+        read_only: false,
+        tmpfs: vec![],
+        volumes: vec![
+            format!("{}:/tmp/pupil.yaml:ro", config_path.display()),
+            format!("{}:/tmp/tests.yaml:ro", test_path.display()),
+        ],
+        cap_drop_all: false,
+        extra_flags: vec!["--user".to_string(), "root".to_string()],
         env: env_vars,
         network: None,
         detach: true,
         name: None,
-        entrypoint: Some("sleep".to_string()),
-        command: vec!["3600".to_string()],
+        entrypoint: Some("pupil-agent".to_string()),
+        command: vec!["idle".to_string()],
+        add_host: Some("host.docker.internal:host-gateway".to_string()),
         ..Default::default()
     };
     runtime
@@ -1745,7 +1767,12 @@ async fn generate_tests(
     let runtime = container::detect().map_err(|_| CliError::ContainerRuntimeNotFound)?;
     let image = image_ref(&config.name, None);
 
-    let container_id = start_test_container(runtime.as_ref(), &image, config).await?;
+    let config_path = agent_dir.join("pupil.yaml");
+    let dummy_test_path = agent_dir.join("tests.yaml");
+    let container_id = start_test_container(
+        runtime.as_ref(), &image, config, agent_dir,
+        if dummy_test_path.exists() { &dummy_test_path } else { &config_path },
+    ).await?;
 
     let _prompt_json =
         serde_json::to_string(&prompt).map_err(|e| CliError::Json(e))?;
@@ -1915,7 +1942,9 @@ pub async fn execute(args: TestArgs) -> Result<(), CliError> {
     let runtime = container::detect().map_err(|_| CliError::ContainerRuntimeNotFound)?;
 
     let image = image_ref(&config.name, None);
-    let container_id = start_test_container(runtime.as_ref(), &image, &config).await?;
+    let container_id = start_test_container(
+        runtime.as_ref(), &image, &config, &agent_dir, &resolved_path,
+    ).await?;
 
     // 5. Wait for agent readiness
     if let Err(e) = wait_for_agent_ready(
@@ -1929,20 +1958,16 @@ pub async fn execute(args: TestArgs) -> Result<(), CliError> {
         return Err(e);
     }
 
-    // 6. Serialize and send tests to container
-    let _serialized_config =
-        serde_json::to_string(&test_config).map_err(|e| CliError::Json(e))?;
-    let _serialized_tests =
-        serde_json::to_string(&tests).map_err(|e| CliError::Json(e))?;
-
+    // 6. Execute tests inside the container
     let output = runtime
         .exec(
             &container_id,
             &[
                 "pupil-agent",
+                "--config", "/tmp/pupil.yaml",
                 "test",
                 "--file",
-                "/app/tests.yaml",
+                "/tmp/tests.yaml",
                 "--json",
             ],
             &[],
@@ -1954,11 +1979,25 @@ pub async fn execute(args: TestArgs) -> Result<(), CliError> {
 
     // 8. Parse results
     let results: Vec<TestResult> = match output {
-        Ok(ref out) => serde_json::from_str(&out.stdout).map_err(|e| {
-            CliError::ConfigInvalid {
-                message: format!("Failed to parse test results from container: {e}"),
-            }
-        })?,
+        Ok(ref out) => {
+            let raw: serde_json::Value = serde_json::from_str(&out.stdout).map_err(|e| {
+                CliError::ConfigInvalid {
+                    message: format!("Failed to parse test results from container: {e}"),
+                }
+            })?;
+            // The container outputs {"summary": {...}, "tests": [...]}.
+            // Extract the tests array.
+            let tests_value = if let Some(tests) = raw.get("tests") {
+                tests.clone()
+            } else {
+                raw
+            };
+            serde_json::from_value(tests_value).map_err(|e| {
+                CliError::ConfigInvalid {
+                    message: format!("Failed to parse test results: {e}"),
+                }
+            })?
+        }
         Err(container_err) => {
             return Err(CliError::ContainerRuntimeError {
                 message: format!("Test execution failed: {container_err}"),

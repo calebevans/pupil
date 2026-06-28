@@ -1,0 +1,8 @@
+Curriculum sources are from OpenStax Astronomy 2e, a free college
+textbook by Andrew Fraknoi, David Morrison, and Sidney Wolff.
+Licensed under Creative Commons Attribution 4.0 International (CC-BY 4.0).
+https://openstax.org/details/books/astronomy-2e/
+
+The benchmark/ directory contains questions from the MMLU (Measuring
+Massive Multitask Language Understanding) dataset by Dan Hendrycks et al.
+https://huggingface.co/datasets/cais/mmlu

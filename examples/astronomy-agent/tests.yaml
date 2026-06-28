@@ -1,0 +1,193 @@
+config:
+  temperature: 0
+  retries: 1
+  threshold: 0.7
+
+tests:
+  # --- Fundamentals ---
+
+  - name: light-year-definition
+    question: "What is a light-year and how far is it?"
+    expects:
+      - llm_judge:
+          criteria: "Defines a light-year as the distance light travels in one year, approximately 9.46 trillion kilometers or about 6 trillion miles"
+
+  - name: electromagnetic-spectrum-order
+    question: "List all regions of the electromagnetic spectrum from longest wavelength to shortest."
+    expects:
+      - llm_judge:
+          criteria: "Lists in correct order from longest to shortest wavelength: radio, microwave, infrared, visible light, ultraviolet, X-ray, gamma ray"
+
+  - name: inverse-square-law
+    question: "How does the brightness of a light source change with distance?"
+    expects:
+      - llm_judge:
+          criteria: "Explains the inverse square law: brightness decreases with the square of the distance. An object twice as far away appears four times dimmer"
+
+  - name: key-physics-constants
+    question: "What are the values of the speed of light and the Boltzmann constant?"
+    expects:
+      - llm_judge:
+          criteria: "States the speed of light as approximately 3 x 10^8 m/s (or 300,000 km/s) and the Boltzmann constant as approximately 1.38 x 10^-23 J/K (or m^2 kg s^-2 K^-1)"
+
+  # --- Stars ---
+
+  - name: hr-diagram
+    question: "What is the Hertzsprung-Russell diagram and what does it show?"
+    expects:
+      - llm_judge:
+          criteria: "Explains that the HR diagram plots stars by luminosity (or absolute magnitude) versus temperature (or spectral type), revealing groupings like the main sequence, giants, and white dwarfs"
+
+  - name: stellar-evolution
+    question: "What determines how a star will end its life?"
+    expects:
+      - llm_judge:
+          criteria: "States that a star's mass is the primary factor. Low-mass stars become white dwarfs, higher-mass stars can end as neutron stars or black holes via supernova"
+
+  - name: stellar-spectral-classes
+    question: "What are the spectral classes of stars and how are they ordered by temperature?"
+    expects:
+      - llm_judge:
+          criteria: "Lists the spectral types O, B, A, F, G, K, M from hottest to coolest. May mention the mnemonic 'Oh Be A Fine Girl/Guy Kiss Me'"
+
+  - name: solar-energy
+    question: "What process powers the Sun and what is its core temperature?"
+    expects:
+      - llm_judge:
+          criteria: "States that nuclear fusion (hydrogen into helium via the proton-proton chain) powers the Sun, and the core temperature is approximately 15 million Kelvin (or 15 million degrees Celsius)"
+
+  - name: parallax
+    question: "How do astronomers use parallax to measure distance to nearby stars?"
+    expects:
+      - llm_judge:
+          criteria: "Explains that parallax uses the apparent shift in a star's position as Earth orbits the Sun, measuring the angle of shift to calculate distance via trigonometry"
+
+  - name: star-clusters
+    question: "What is the difference between open clusters and globular clusters?"
+    expects:
+      - llm_judge:
+          criteria: "States that open clusters are young, loosely bound groups of up to a few thousand stars found in the galactic disk, while globular clusters are old, dense, spherical collections of hundreds of thousands of stars found in the galactic halo"
+
+  # --- Solar System ---
+
+  - name: planet-types
+    question: "What are the two main categories of planets in our solar system and what distinguishes them?"
+    expects:
+      - llm_judge:
+          criteria: "Identifies terrestrial (rocky, small, dense, close to Sun) and jovian (gaseous, large, low density, farther from Sun) planets with correct members of each group"
+
+  - name: jovian-planet-composition
+    question: "What are the giant planets actually made of? Are they entirely gas?"
+    expects:
+      - llm_judge:
+          criteria: "Explains that despite being called gas giants, the jovian planets contain significant amounts of liquid and solid material under extreme pressure. Jupiter and Saturn are mostly hydrogen and helium; Uranus and Neptune are sometimes called ice giants because they contain more water, ammonia, and methane"
+
+  - name: moon-counts
+    question: "Which planets in our solar system have the most moons, and approximately how many does each have?"
+    expects:
+      - llm_judge:
+          criteria: "Identifies Jupiter and Saturn as having the most moons, with counts in the range of 80-100+ for each. Should mention that Uranus and Neptune also have significant moon systems"
+
+  - name: dwarf-planets
+    question: "What defines a dwarf planet and what are some examples?"
+    expects:
+      - llm_judge:
+          criteria: "States that a dwarf planet orbits the Sun, has enough mass for a roughly spherical shape, but has not cleared its orbital neighborhood. Examples include Pluto, Eris, Ceres, Haumea, and Makemake"
+
+  - name: asteroid-belt-structure
+    question: "Where is the asteroid belt and what are orbital resonances in the context of asteroids?"
+    expects:
+      - llm_judge:
+          criteria: "States the asteroid belt is between Mars and Jupiter. Explains that orbital resonances with Jupiter create gaps (sometimes called Kirkwood gaps) where asteroids are depleted because they would orbit with periods that are simple fractions of Jupiter's period"
+
+  - name: titan-atmosphere
+    question: "Which moon in the outer solar system has a thick atmosphere and what is it composed of?"
+    expects:
+      - llm_judge:
+          criteria: "Identifies Titan (Saturn's moon) as the only moon with a thick atmosphere, composed primarily of nitrogen with some methane and other hydrocarbons"
+
+  - name: impact-crater-features
+    question: "What features are common to impact craters on solid surfaces?"
+    expects:
+      - llm_judge:
+          criteria: "Mentions key features including raised rims, ejecta blankets, and for larger craters, central peaks and terraced walls. Should note that smaller craters are bowl-shaped while larger ones have more complex structures"
+
+  # --- Galaxies and Cosmology ---
+
+  - name: galaxy-types
+    question: "What are the main types of galaxies and how are they classified?"
+    expects:
+      - llm_judge:
+          criteria: "Identifies spiral, elliptical, and irregular galaxies. May mention Hubble's tuning fork diagram. Notes that the Milky Way is a spiral (or barred spiral) galaxy"
+
+  - name: big-bang-evidence
+    question: "What are the main pieces of evidence for the Big Bang?"
+    expects:
+      - llm_judge:
+          criteria: "Mentions at least two of: the cosmic microwave background radiation, the observed expansion of the universe (Hubble's law), and the abundance of light elements (hydrogen and helium)"
+
+  - name: dark-matter-evidence
+    question: "What evidence is there for dark matter?"
+    expects:
+      - llm_judge:
+          criteria: "Mentions at least one of: galaxy rotation curves (stars orbit faster than visible mass can explain), gravitational lensing, or the dynamics of galaxy clusters"
+
+  - name: distance-ladder
+    question: "How do astronomers measure distances to increasingly faraway objects?"
+    expects:
+      - llm_judge:
+          criteria: "Describes the cosmic distance ladder: parallax for nearby stars, Cepheid variable stars for galaxies, Type Ia supernovae for distant galaxies. Each method calibrates the next"
+
+  # --- Observation and Instruments ---
+
+  - name: telescope-types
+    question: "What are the main types of optical telescopes and how do they differ?"
+    expects:
+      - llm_judge:
+          criteria: "Identifies refractors (use lenses) and reflectors (use mirrors). May mention that most modern large telescopes are reflectors because mirrors can be made larger and don't suffer from chromatic aberration"
+
+  - name: angular-resolution
+    question: "What limits the angular resolution of a telescope?"
+    expects:
+      - llm_judge:
+          criteria: "States that resolution is limited by the aperture (diameter) of the telescope and the wavelength of light being observed (diffraction limit), and for ground telescopes, atmospheric seeing also limits resolution"
+
+  # --- Earth, Moon, and Sky ---
+
+  - name: moon-phases
+    question: "What causes the phases of the Moon?"
+    expects:
+      - llm_judge:
+          criteria: "Explains that Moon phases are caused by the changing angle between the Sun, Earth, and Moon as the Moon orbits Earth, so we see different portions of the sunlit side"
+
+  - name: seasons
+    question: "What causes the seasons on Earth?"
+    expects:
+      - llm_judge:
+          criteria: "States that seasons are caused by the tilt of Earth's axis (approximately 23.5 degrees), which changes the angle of incoming sunlight and the length of day throughout the year. NOT caused by distance from the Sun"
+
+  - name: eclipse-types
+    question: "What is the difference between a solar eclipse and a lunar eclipse?"
+    expects:
+      - llm_judge:
+          criteria: "States that a solar eclipse occurs when the Moon passes between the Sun and Earth, blocking sunlight. A lunar eclipse occurs when Earth passes between the Sun and Moon, casting its shadow on the Moon"
+
+  # --- Distances and Scales ---
+
+  - name: astronomical-unit
+    question: "What is an astronomical unit and how far is it?"
+    expects:
+      - llm_judge:
+          criteria: "Defines an AU as the average distance from Earth to the Sun, approximately 150 million kilometers or 93 million miles"
+
+  - name: solar-system-scale
+    question: "How far is the nearest star to the Sun and what is its name?"
+    expects:
+      - llm_judge:
+          criteria: "Identifies Proxima Centauri (or Alpha Centauri system) at approximately 4.2 light-years (or about 1.3 parsecs or 270,000 AU)"
+
+  - name: milky-way-size
+    question: "How large is the Milky Way galaxy?"
+    expects:
+      - llm_judge:
+          criteria: "States the Milky Way is approximately 100,000 light-years in diameter (values in the range of 100,000-200,000 are acceptable) and contains roughly 100-400 billion stars"

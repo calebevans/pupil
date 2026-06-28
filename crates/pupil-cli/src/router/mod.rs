@@ -477,6 +477,7 @@ pub async fn start_server(
         engine,
         affinity,
         http_client: reqwest::Client::new(),
+        max_inter_agent_depth: config.router.max_inter_agent_depth,
     });
 
     let app = build_router(state, prom_handle);

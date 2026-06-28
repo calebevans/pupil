@@ -7,11 +7,14 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::collaboration::{AgentCaller, AgentRegistryEntry};
 use crate::config::AgentConfig;
 use crate::conversation::ConversationManager;
-use crate::llm::{ChatConfig, LlmProvider, StopReason, ToolCall, ToolDefinition, ToolResult};
+use crate::llm::{
+    ChatConfig, LlmProvider, ResponseSchema, StopReason, ToolCall, ToolDefinition, ToolResult,
+};
 use crate::mcp::McpManager;
-use crate::prompt::SystemPromptBuilder;
+use crate::prompt::{PeerAgent, SystemPromptBuilder};
 
 #[derive(Debug, Error)]
 pub enum AgentError {
@@ -44,6 +47,9 @@ pub struct Agent {
     llm: Box<dyn LlmProvider>,
     chat_config: ChatConfig,
     cancel: CancellationToken,
+    collaboration: Option<AgentCaller>,
+    current_depth: u32,
+    call_chain: Vec<String>,
 }
 
 impl Agent {
@@ -58,25 +64,81 @@ impl Agent {
 
         let mcp_manager = Arc::new(mcp_manager);
 
-        let llm_tools: Vec<ToolDefinition> = mcp_manager
+        let mut llm_tools: Vec<ToolDefinition> = mcp_manager
             .all_tools()
             .iter()
             .map(|t| t.into())
             .collect();
+
+        let collab_enabled = config
+            .collaboration
+            .as_ref()
+            .map(|c| c.enabled)
+            .unwrap_or(false);
+
+        let collaboration = if collab_enabled {
+            let registry_json = std::env::var("PUPIL_AGENT_REGISTRY").ok();
+            let registry: Vec<AgentRegistryEntry> = registry_json
+                .as_deref()
+                .and_then(|json| crate::collaboration::parse_agent_registry(json).ok())
+                .unwrap_or_default();
+
+            if !registry.is_empty() {
+                let collab_config = config.collaboration.as_ref().unwrap();
+                let router_url = std::env::var("PUPIL_ROUTER_URL").ok();
+                let caller = AgentCaller::new(
+                    collab_config,
+                    registry,
+                    config.name.clone(),
+                    router_url,
+                );
+                llm_tools.push(crate::collaboration::tool::ask_agent_tool_definition());
+                Some(caller)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let peers: Vec<PeerAgent> = collaboration
+            .as_ref()
+            .map(|c| {
+                c.registry()
+                    .iter()
+                    .map(|e| PeerAgent {
+                        name: e.name.clone(),
+                        description: e.description.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let namespace = config
             .curriculum
             .as_ref()
             .map(|c| c.namespace.clone())
             .unwrap_or_else(|| "knowledge".to_string());
-        let system_prompt = SystemPromptBuilder::new(
+        let mut prompt_builder = SystemPromptBuilder::new(
             config.name.clone(),
             config.description.clone(),
             config.system_prompt.clone(),
             llm_tools,
             namespace,
         )
-        .build();
+        .with_peers(peers)
+        .with_collaboration(collaboration.is_some());
+
+        if let Some(ref rs) = config.response_schema {
+            prompt_builder = prompt_builder.with_response_schema(&ResponseSchema {
+                name: rs.name.clone(),
+                description: rs.description.clone(),
+                schema: rs.schema.clone(),
+                strict: rs.strict,
+            });
+        }
+
+        let system_prompt = prompt_builder.build();
 
         let session_id = Uuid::new_v4();
         let conversation = ConversationManager::new(system_prompt, session_id);
@@ -88,6 +150,16 @@ impl Agent {
         } else {
             chat_config
         };
+        let chat_config = if let Some(ref rs) = config.response_schema {
+            chat_config.with_response_schema(ResponseSchema {
+                name: rs.name.clone(),
+                description: rs.description.clone(),
+                schema: rs.schema.clone(),
+                strict: rs.strict,
+            })
+        } else {
+            chat_config
+        };
 
         Ok(Self {
             config,
@@ -96,6 +168,9 @@ impl Agent {
             llm,
             chat_config,
             cancel,
+            collaboration,
+            current_depth: 0,
+            call_chain: Vec::new(),
         })
     }
 
@@ -147,6 +222,7 @@ impl Agent {
     async fn handle_turn(&mut self) -> Result<()> {
         let mut iterations: u32 = 0;
         let mut malformed_retries: u32 = 0;
+        let mut ask_agent_calls: u32 = 0;
         let turn_start_tokens = self.conversation.total_tokens();
 
         loop {
@@ -155,12 +231,15 @@ impl Agent {
             }
 
             let messages = self.conversation.messages();
-            let llm_tools: Vec<ToolDefinition> = self
+            let mut llm_tools: Vec<ToolDefinition> = self
                 .mcp_manager
                 .all_tools()
                 .iter()
                 .map(|t| t.into())
                 .collect();
+            if self.collaboration.is_some() {
+                llm_tools.push(crate::collaboration::tool::ask_agent_tool_definition());
+            }
 
             let response = self
                 .llm
@@ -213,7 +292,9 @@ impl Agent {
                     "Executing tool calls"
                 );
 
-                let results = self.execute_tools_parallel(&tool_calls).await;
+                let results = self
+                    .execute_tools_parallel(&tool_calls, &mut ask_agent_calls)
+                    .await;
                 self.conversation.push_tool_results(results);
             } else {
                 match response.stop_reason {
@@ -277,25 +358,45 @@ impl Agent {
         Ok(())
     }
 
-    async fn execute_tools_parallel(&self, calls: &[ToolCall]) -> Vec<ToolResult> {
+    async fn execute_tools_parallel(
+        &self,
+        calls: &[ToolCall],
+        ask_agent_calls: &mut u32,
+    ) -> Vec<ToolResult> {
         if calls.is_empty() {
             return Vec::new();
         }
 
-        let handles: Vec<_> = calls
-            .iter()
-            .map(|call| {
+        let mut mcp_calls: Vec<(usize, ToolCall)> = Vec::new();
+        let mut agent_calls: Vec<(usize, ToolCall)> = Vec::new();
+
+        for (i, call) in calls.iter().enumerate() {
+            if call.name == "ask_agent" {
+                agent_calls.push((i, call.clone()));
+            } else {
+                mcp_calls.push((i, call.clone()));
+            }
+        }
+
+        let mut results: Vec<Option<ToolResult>> = vec![None; calls.len()];
+
+        let mcp_handles: Vec<_> = mcp_calls
+            .into_iter()
+            .map(|(idx, call)| {
                 let manager = Arc::clone(&self.mcp_manager);
                 let timeout = self.config.tool_timeout;
-                let call = call.clone();
                 tokio::spawn(async move {
                     let timer = Instant::now();
                     let arguments = call.arguments.as_object().cloned();
-                    match tokio::time::timeout(timeout, manager.call_tool(&call.name, arguments))
-                        .await
+                    let result = match tokio::time::timeout(
+                        timeout,
+                        manager.call_tool(&call.name, arguments),
+                    )
+                    .await
                     {
                         Ok(Ok(result)) => {
-                            let result_text = crate::mcp::schema::tool_result_to_string(&result);
+                            let result_text =
+                                crate::mcp::schema::tool_result_to_string(&result);
                             tracing::info!(
                                 tool = %call.name,
                                 latency_ms = timer.elapsed().as_millis() as u64,
@@ -326,25 +427,87 @@ impl Agent {
                                 ),
                             )
                         }
-                    }
+                    };
+                    (idx, result)
                 })
             })
             .collect();
 
-        let results = futures::future::join_all(handles).await;
+        let mcp_results = futures::future::join_all(mcp_handles).await;
+        for join_result in mcp_results {
+            match join_result {
+                Ok((idx, result)) => {
+                    results[idx] = Some(result);
+                }
+                Err(join_err) => {
+                    tracing::error!(error = %join_err, "Tool task panicked");
+                }
+            }
+        }
+
+        for (idx, call) in agent_calls {
+            let max_per_turn = self
+                .collaboration
+                .as_ref()
+                .map(|c| c.max_calls_per_turn())
+                .unwrap_or(10);
+            if *ask_agent_calls >= max_per_turn {
+                results[idx] = Some(ToolResult::error(
+                    call.id.clone(),
+                    format!(
+                        "Call limit exceeded: {}/{} ask_agent calls this turn",
+                        ask_agent_calls, max_per_turn
+                    ),
+                ));
+                continue;
+            }
+
+            let agent_name = call
+                .arguments
+                .get("agent")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let question = call
+                .arguments
+                .get("question")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            if agent_name.is_empty() || question.is_empty() {
+                results[idx] = Some(ToolResult::error(
+                    call.id.clone(),
+                    "ask_agent requires both 'agent' and 'question' parameters".to_string(),
+                ));
+                continue;
+            }
+
+            let result = if let Some(ref collab) = self.collaboration {
+                match collab
+                    .call(agent_name, question, self.current_depth, &self.call_chain)
+                    .await
+                {
+                    Ok(content) => ToolResult::success(call.id.clone(), content),
+                    Err(e) => ToolResult::error(call.id.clone(), e.to_string()),
+                }
+            } else {
+                ToolResult::error(
+                    call.id.clone(),
+                    "Collaboration is not configured".to_string(),
+                )
+            };
+            *ask_agent_calls += 1;
+            results[idx] = Some(result);
+        }
+
         results
             .into_iter()
             .enumerate()
-            .map(|(i, r)| {
-                r.unwrap_or_else(|join_err| {
+            .map(|(i, opt)| {
+                opt.unwrap_or_else(|| {
                     let call_id = calls
                         .get(i)
                         .map(|c| c.id.clone())
                         .unwrap_or_else(|| "unknown".to_string());
-                    tracing::error!(
-                        error = %join_err,
-                        "Tool task panicked"
-                    );
                     ToolResult::error(call_id, "Internal error: tool task panicked".to_string())
                 })
             })

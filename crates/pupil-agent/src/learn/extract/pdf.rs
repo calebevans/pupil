@@ -8,13 +8,27 @@ pub fn extract_pdf(
     raw_bytes: &[u8],
     source: &ResolvedSource,
 ) -> anyhow::Result<ExtractedContent> {
-    let text = pdf_extract::extract_text_from_mem(raw_bytes).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to extract text from PDF '{}': {}",
-            source.source_key,
-            e
-        )
-    })?;
+    let bytes_owned = raw_bytes.to_vec();
+    let text_result = std::panic::catch_unwind(|| {
+        pdf_extract::extract_text_from_mem(&bytes_owned)
+    });
+
+    let text = match text_result {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
+            return Err(anyhow::anyhow!(
+                "Failed to extract text from PDF '{}': {}",
+                source.source_key,
+                e
+            ));
+        }
+        Err(_) => {
+            return Err(anyhow::anyhow!(
+                "PDF extractor crashed on '{}'. The file may be scanned, image-heavy, or use an unsupported format.",
+                source.source_key,
+            ));
+        }
+    };
 
     let normalized = normalize_pdf_text(&text);
 

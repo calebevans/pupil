@@ -38,6 +38,9 @@ pub struct RouterSettings {
 
     #[serde(default = "default_session_ttl")]
     pub session_ttl_secs: u64,
+
+    #[serde(default = "default_max_inter_agent_depth")]
+    pub max_inter_agent_depth: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -174,6 +177,9 @@ fn default_true() -> bool {
 }
 pub(crate) fn default_session_ttl() -> u64 {
     3600
+}
+pub(crate) fn default_max_inter_agent_depth() -> u32 {
+    5
 }
 
 impl Default for HybridConfig {
@@ -322,6 +328,7 @@ mod tests {
                 health_check: HealthCheckConfig::default(),
                 session_affinity: true,
                 session_ttl_secs: 3600,
+                max_inter_agent_depth: 5,
             },
             agents: vec![AgentConfig {
                 name: "agent-1".to_string(),

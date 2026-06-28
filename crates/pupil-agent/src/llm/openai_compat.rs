@@ -10,7 +10,8 @@ use async_openai::{
         ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
         ChatCompletionRequestUserMessageContent, ChatCompletionStreamOptions,
         ChatCompletionTool, ChatCompletionTools, CreateChatCompletionRequestArgs, FinishReason,
-        FunctionCall, FunctionObject, StopConfiguration,
+        FunctionCall, FunctionObject, ResponseFormat, ResponseFormatJsonSchema,
+        StopConfiguration,
     },
     Client as OpenAiClient,
 };
@@ -226,6 +227,19 @@ impl LlmProvider for OpenAiCompatProvider {
             ));
         }
 
+        if let Some(ref rs) = config.response_schema {
+            builder.response_format(ResponseFormat::JsonSchema {
+                json_schema: ResponseFormatJsonSchema {
+                    name: rs.name.clone(),
+                    description: rs.description.clone(),
+                    schema: Some(rs.schema.clone()),
+                    strict: Some(rs.strict),
+                },
+            });
+        } else if config.json_mode {
+            builder.response_format(ResponseFormat::JsonObject);
+        }
+
         let request = builder
             .build()
             .map_err(|e| LlmError::Other(anyhow::anyhow!("failed to build request: {e}")))?;
@@ -308,6 +322,19 @@ impl LlmProvider for OpenAiCompatProvider {
             builder.stop(StopConfiguration::StringArray(
                 config.stop_sequences.clone(),
             ));
+        }
+
+        if let Some(ref rs) = config.response_schema {
+            builder.response_format(ResponseFormat::JsonSchema {
+                json_schema: ResponseFormatJsonSchema {
+                    name: rs.name.clone(),
+                    description: rs.description.clone(),
+                    schema: Some(rs.schema.clone()),
+                    strict: Some(rs.strict),
+                },
+            });
+        } else if config.json_mode {
+            builder.response_format(ResponseFormat::JsonObject);
         }
 
         builder.stream_options(ChatCompletionStreamOptions {

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod agent;
+pub mod collaboration;
 pub mod conversation;
 pub mod error;
 pub mod logging;

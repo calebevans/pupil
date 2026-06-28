@@ -4,7 +4,8 @@ use super::config::{
     AgentConfig, ClassifierConfig, EmbeddingConfig, HealthCheckConfig, HybridConfig,
     RouterConfig, RouterSettings, default_classifier_model, default_confidence_threshold,
     default_embedding_dims, default_embedding_model, default_embedding_provider,
-    default_ollama_url, default_session_ttl, default_strategy, default_listen,
+    default_max_inter_agent_depth, default_ollama_url, default_session_ttl, default_strategy,
+    default_listen,
 };
 
 pub async fn generate_config_from_agents(
@@ -118,6 +119,7 @@ pub async fn generate_config_from_agents(
             health_check: HealthCheckConfig::default(),
             session_affinity: true,
             session_ttl_secs: default_session_ttl(),
+            max_inter_agent_depth: default_max_inter_agent_depth(),
         },
         agents,
     };

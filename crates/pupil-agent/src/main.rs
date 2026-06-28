@@ -772,70 +772,108 @@ async fn eval_llm_judge_in_container(
     criteria: &str,
     threshold: f64,
 ) -> AssertionResultValue {
-    use pupil_agent::llm::{ChatConfig, Message};
+    use pupil_agent::llm::{ChatConfig, Message, ToolDefinition};
 
     let prompt = format!(
-        r#"You are evaluating an AI agent's response to a question.
-
-Question asked:
-{question}
-
-Agent's response:
-{response}
-
-Evaluation criteria:
-{criteria}
-
-Instructions:
-- Score the response from 0.0 to 1.0 based on how well it meets ALL of the evaluation criteria.
-- 1.0 = fully satisfies every criterion with accurate, complete information.
-- 0.7 = mostly satisfies the criteria with minor gaps or imprecisions.
-- 0.4 = partially addresses the criteria but has significant gaps.
-- 0.0 = completely fails to address the criteria or provides wrong information.
-- Be strict: vague or generic responses that do not demonstrate specific knowledge should score below 0.5.
-- Be fair: the response does not need to use the exact same words as the criteria, only convey the same concepts.
-
-Respond with ONLY a JSON object, no other text:
-{{"score": <float 0.0-1.0>, "reasoning": "<one sentence explanation>"}}"#
+        "Score how well this response meets the criteria, then call the submit_score tool.\n\n\
+         QUESTION: {question}\n\
+         RESPONSE: {response}\n\
+         CRITERIA: {criteria}\n\n\
+         Scoring: 1.0 = fully meets criteria, 0.7 = mostly meets with minor gaps, \
+         0.4 = partially meets, 0.0 = wrong or missing."
     );
+
+    let score_tool = ToolDefinition {
+        name: "submit_score".to_string(),
+        description: "Submit the evaluation score and reasoning".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "score": {
+                    "type": "number",
+                    "description": "Score from 0.0 to 1.0"
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": "One sentence explanation"
+                }
+            },
+            "required": ["score", "reasoning"]
+        }),
+    };
 
     let messages = vec![Message::user(prompt)];
     let chat_config = ChatConfig::new(judge_model.to_string())
         .with_temperature(0.0)
-        .with_max_tokens(256);
+        .with_max_tokens(512);
 
-    let result = judge_llm.chat(&messages, &[], &chat_config).await;
+    let max_attempts = 3;
+    for attempt in 0..max_attempts {
+        let result = judge_llm.chat(&messages, &[score_tool.clone()], &chat_config).await;
 
-    match result {
-        Ok(chat_response) => {
-            match parse_judge_response_inline(&chat_response.content) {
-                Ok((score, reasoning)) => {
-                    let passed = score >= threshold;
-                    AssertionResultValue {
-                        assertion_type: "llm_judge".to_string(),
-                        passed,
-                        score: Some(score),
-                        threshold: Some(threshold),
-                        detail: reasoning,
+        match result {
+            Ok(chat_response) => {
+                if let Some(tc) = chat_response.tool_calls.first() {
+                    if let Ok(args) = serde_json::from_value::<ScoreArgs>(tc.arguments.clone()) {
+                        let score = args.score.clamp(0.0, 1.0);
+                        let passed = score >= threshold;
+                        return AssertionResultValue {
+                            assertion_type: "llm_judge".to_string(),
+                            passed,
+                            score: Some(score),
+                            threshold: Some(threshold),
+                            detail: args.reasoning,
+                        };
                     }
                 }
-                Err(e) => AssertionResultValue {
+
+                // Fallback: try parsing the text content as JSON
+                if !chat_response.content.is_empty() {
+                    if let Ok((score, reasoning)) = parse_judge_response_inline(&chat_response.content) {
+                        let passed = score >= threshold;
+                        return AssertionResultValue {
+                            assertion_type: "llm_judge".to_string(),
+                            passed,
+                            score: Some(score),
+                            threshold: Some(threshold),
+                            detail: reasoning,
+                        };
+                    }
+                }
+
+                if attempt < max_attempts - 1 {
+                    continue;
+                }
+                return AssertionResultValue {
                     assertion_type: "llm_judge".to_string(),
                     passed: false,
                     score: None,
                     threshold: Some(threshold),
-                    detail: format!("Failed to parse judge response: {e}"),
-                },
+                    detail: "Judge did not return a score via tool call or parseable text".to_string(),
+                };
+            }
+            Err(e) => {
+                if attempt < max_attempts - 1 {
+                    continue;
+                }
+                return AssertionResultValue {
+                    assertion_type: "llm_judge".to_string(),
+                    passed: false,
+                    score: None,
+                    threshold: Some(threshold),
+                    detail: format!("Judge LLM call failed: {e}"),
+                };
             }
         }
-        Err(e) => AssertionResultValue {
-            assertion_type: "llm_judge".to_string(),
-            passed: false,
-            score: None,
-            threshold: Some(threshold),
-            detail: format!("Judge LLM call failed: {e}"),
-        },
     }
+    unreachable!()
+}
+
+#[derive(serde::Deserialize)]
+struct ScoreArgs {
+    score: f64,
+    #[serde(default)]
+    reasoning: String,
 }
 
 /// Parse {"score": 0.8, "reasoning": "..."} from judge output.
@@ -850,25 +888,46 @@ fn parse_judge_response_inline(raw: &str) -> Result<(f64, String), String> {
         .unwrap_or(trimmed);
     let cleaned = cleaned.strip_suffix("```").unwrap_or(cleaned).trim();
 
-    // Find JSON object
-    let start = cleaned
-        .find('{')
-        .ok_or("No JSON object in judge response")?;
-    let end = cleaned
-        .rfind('}')
-        .ok_or("No closing brace in judge response")?;
-    let json_str = &cleaned[start..=end];
+    // Try to find a JSON object first
+    if let (Some(start), Some(end)) = (cleaned.find('{'), cleaned.rfind('}')) {
+        #[derive(serde::Deserialize)]
+        struct JudgeResp {
+            score: f64,
+            #[serde(default)]
+            reasoning: String,
+        }
 
-    #[derive(serde::Deserialize)]
-    struct JudgeResp {
-        score: f64,
-        reasoning: String,
+        if let Ok(parsed) = serde_json::from_str::<JudgeResp>(&cleaned[start..=end]) {
+            return Ok((parsed.score.clamp(0.0, 1.0), parsed.reasoning));
+        }
     }
 
-    let parsed: JudgeResp = serde_json::from_str(json_str)
-        .map_err(|e| format!("JSON parse error: {e}"))?;
+    // Fallback: extract a numeric score from the raw text (handles quoted and unquoted keys)
+    let score_re = regex::Regex::new(
+        r#"(?i)"?(?:score|rating)"?\s*[:=]\s*([01]\.?\d*)"#
+    ).unwrap();
+    if let Some(caps) = score_re.captures(cleaned) {
+        if let Ok(score) = caps[1].parse::<f64>() {
+            let reasoning = regex::Regex::new(r#"(?i)"?reasoning"?\s*[:=]\s*"([^"]+)"#)
+                .ok()
+                .and_then(|re| re.captures(cleaned))
+                .map(|c| c[1].to_string())
+                .unwrap_or_default();
+            return Ok((score.clamp(0.0, 1.0), reasoning));
+        }
+    }
 
-    Ok((parsed.score.clamp(0.0, 1.0), parsed.reasoning))
+    // Last resort: look for any float between 0 and 1 on its own line
+    for line in cleaned.lines() {
+        let line = line.trim();
+        if let Ok(score) = line.parse::<f64>() {
+            if (0.0..=1.0).contains(&score) {
+                return Ok((score, cleaned.to_string()));
+            }
+        }
+    }
+
+    Err(format!("Could not extract score from judge response: {}", &cleaned[..cleaned.len().min(200)]))
 }
 
 #[cfg(feature = "learn")]

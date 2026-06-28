@@ -216,12 +216,29 @@ impl Message {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResponseSchema {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub schema: serde_json::Value,
+    #[serde(default = "default_strict")]
+    pub strict: bool,
+}
+
+fn default_strict() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChatConfig {
     pub model: String,
     pub temperature: Option<f64>,
     pub max_tokens: Option<u32>,
     pub top_p: Option<f64>,
     pub stop_sequences: Vec<String>,
+    pub json_mode: bool,
+    #[serde(default)]
+    pub response_schema: Option<ResponseSchema>,
 }
 
 impl Default for ChatConfig {
@@ -232,6 +249,8 @@ impl Default for ChatConfig {
             max_tokens: None,
             top_p: None,
             stop_sequences: Vec::new(),
+            json_mode: false,
+            response_schema: None,
         }
     }
 }
@@ -261,6 +280,11 @@ impl ChatConfig {
 
     pub fn with_stop_sequence(mut self, seq: impl Into<String>) -> Self {
         self.stop_sequences.push(seq.into());
+        self
+    }
+
+    pub fn with_response_schema(mut self, schema: ResponseSchema) -> Self {
+        self.response_schema = Some(schema);
         self
     }
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -20,14 +20,15 @@ use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
+use crate::collaboration::{AgentCaller, AgentRegistryEntry};
 use crate::config::AgentConfig;
 use crate::conversation::ConversationManager;
 use crate::llm::{
-    ChatConfig, CostTracker, LlmProvider, Message, StopReason, TokenUsage, ToolCall,
-    ToolDefinition, ToolResult,
+    ChatConfig, CostTracker, LlmProvider, Message, ResponseSchema, StopReason, TokenUsage,
+    ToolCall, ToolDefinition, ToolResult,
 };
 use crate::mcp::McpManager;
-use crate::prompt::SystemPromptBuilder;
+use crate::prompt::{PeerAgent, SystemPromptBuilder};
 
 // ---------------------------------------------------------------------------
 // 1. Error Types
@@ -77,6 +78,18 @@ pub enum ApiError {
 
     #[error("Service is shutting down")]
     ShuttingDown,
+
+    #[error(
+        "Invalid response_schema: name must match [a-zA-Z0-9_-] \
+         and be at most 64 characters"
+    )]
+    InvalidResponseSchema,
+
+    #[error(
+        "Structured response was truncated (max output tokens reached). \
+         Increase max_tokens or simplify the schema."
+    )]
+    StructuredOutputTruncated,
 }
 
 impl ApiError {
@@ -86,10 +99,12 @@ impl ApiError {
             ApiError::EmptyMessages => StatusCode::BAD_REQUEST,
             ApiError::LastMessageNotUser => StatusCode::BAD_REQUEST,
             ApiError::InvalidModel(_) => StatusCode::BAD_REQUEST,
+            ApiError::InvalidResponseSchema => StatusCode::BAD_REQUEST,
             ApiError::SessionNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::McpServerUnhealthy(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::StreamError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::StructuredOutputTruncated => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
             ApiError::ShuttingDown => StatusCode::SERVICE_UNAVAILABLE,
         }
@@ -100,10 +115,13 @@ impl ApiError {
             ApiError::BadRequest(_)
             | ApiError::EmptyMessages
             | ApiError::LastMessageNotUser
-            | ApiError::InvalidModel(_) => "invalid_request_error",
+            | ApiError::InvalidModel(_)
+            | ApiError::InvalidResponseSchema => "invalid_request_error",
             ApiError::SessionNotFound(_) => "not_found",
             ApiError::McpServerUnhealthy(_) | ApiError::ShuttingDown => "service_unavailable",
-            ApiError::Internal(_) | ApiError::StreamError(_) => "server_error",
+            ApiError::Internal(_)
+            | ApiError::StreamError(_)
+            | ApiError::StructuredOutputTruncated => "server_error",
             ApiError::RateLimited { .. } => "rate_limit_error",
         }
     }
@@ -114,10 +132,12 @@ impl ApiError {
             ApiError::EmptyMessages => "empty_messages",
             ApiError::LastMessageNotUser => "last_message_not_user",
             ApiError::InvalidModel(_) => "invalid_model",
+            ApiError::InvalidResponseSchema => "invalid_response_schema",
             ApiError::SessionNotFound(_) => "session_not_found",
             ApiError::McpServerUnhealthy(_) => "mcp_server_unhealthy",
             ApiError::Internal(_) => "internal_error",
             ApiError::StreamError(_) => "stream_failed",
+            ApiError::StructuredOutputTruncated => "structured_output_truncated",
             ApiError::RateLimited { .. } => "rate_limit_exceeded",
             ApiError::ShuttingDown => "shutting_down",
         }
@@ -159,6 +179,20 @@ impl IntoResponse for ApiError {
 // 2. Request and Response Types
 // ---------------------------------------------------------------------------
 
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RequestResponseSchema {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub schema: serde_json::Value,
+    #[serde(default = "default_true")]
+    pub strict: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionRequest {
     #[serde(default)]
@@ -177,6 +211,9 @@ pub struct ChatCompletionRequest {
 
     #[serde(default)]
     pub session_id: Option<Uuid>,
+
+    #[serde(default)]
+    pub response_schema: Option<RequestResponseSchema>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -344,6 +381,7 @@ pub struct AppState {
     pub system_prompt: String,
     pub llm: Arc<dyn LlmProvider>,
     pub mcp_manager: Arc<McpManager>,
+    pub collaboration: Option<AgentCaller>,
     pub sessions: DashMap<Uuid, Arc<tokio::sync::Mutex<ConversationManager>>>,
     pub cost_tracker: Arc<tokio::sync::Mutex<CostTracker>>,
     pub started_at: Instant,
@@ -496,25 +534,81 @@ pub async fn start_server(
     mcp_manager: Arc<McpManager>,
     cost_tracker: Arc<tokio::sync::Mutex<CostTracker>>,
 ) -> anyhow::Result<()> {
-    let llm_tools: Vec<ToolDefinition> = mcp_manager
+    let mut llm_tools: Vec<ToolDefinition> = mcp_manager
         .all_tools()
         .iter()
         .map(|t| t.into())
         .collect();
+
+    let collab_enabled = config
+        .collaboration
+        .as_ref()
+        .map(|c| c.enabled)
+        .unwrap_or(false);
+
+    let collaboration = if collab_enabled {
+        let registry_json = std::env::var("PUPIL_AGENT_REGISTRY").ok();
+        let registry: Vec<AgentRegistryEntry> = registry_json
+            .as_deref()
+            .and_then(|json| crate::collaboration::parse_agent_registry(json).ok())
+            .unwrap_or_default();
+
+        if !registry.is_empty() {
+            let collab_config = config.collaboration.as_ref().unwrap();
+            let router_url = std::env::var("PUPIL_ROUTER_URL").ok();
+            let caller = AgentCaller::new(
+                collab_config,
+                registry,
+                config.name.clone(),
+                router_url,
+            );
+            llm_tools.push(crate::collaboration::tool::ask_agent_tool_definition());
+            Some(caller)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let peers: Vec<PeerAgent> = collaboration
+        .as_ref()
+        .map(|c| {
+            c.registry()
+                .iter()
+                .map(|e| PeerAgent {
+                    name: e.name.clone(),
+                    description: e.description.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     let namespace = config
         .curriculum
         .as_ref()
         .map(|c| c.namespace.clone())
         .unwrap_or_else(|| "knowledge".to_string());
-    let system_prompt = SystemPromptBuilder::new(
+    let mut prompt_builder = SystemPromptBuilder::new(
         config.name.clone(),
         config.description.clone(),
         config.system_prompt.clone(),
         llm_tools,
         namespace,
     )
-    .build();
+    .with_peers(peers)
+    .with_collaboration(collaboration.is_some());
+
+    if let Some(ref rs) = config.response_schema {
+        prompt_builder = prompt_builder.with_response_schema(&ResponseSchema {
+            name: rs.name.clone(),
+            description: rs.description.clone(),
+            schema: rs.schema.clone(),
+            strict: rs.strict,
+        });
+    }
+
+    let system_prompt = prompt_builder.build();
 
     let shutdown_token = CancellationToken::new();
 
@@ -523,6 +617,7 @@ pub async fn start_server(
         system_prompt,
         llm,
         mcp_manager,
+        collaboration,
         sessions: DashMap::new(),
         cost_tracker,
         started_at: Instant::now(),
@@ -603,10 +698,44 @@ async fn shutdown_signal() {
 
 async fn handle_chat_completions(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request): Json<ChatCompletionRequest>,
 ) -> Result<Response, ApiError> {
     if state.is_shutting_down.load(Ordering::SeqCst) {
         return Err(ApiError::ShuttingDown);
+    }
+
+    let incoming_depth: u32 = headers
+        .get("x-pupil-depth")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let incoming_chain: Vec<String> = headers
+        .get("x-pupil-chain")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            s.split(',')
+                .filter(|p| !p.is_empty())
+                .map(|p| p.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if let Some(ref collab) = state.collaboration {
+        let max_depth = state
+            .config
+            .collaboration
+            .as_ref()
+            .map(|c| c.max_depth)
+            .unwrap_or(3);
+        if incoming_depth >= max_depth {
+            return Err(ApiError::BadRequest(format!(
+                "Inter-agent call depth limit exceeded (depth={}, max={})",
+                incoming_depth, max_depth
+            )));
+        }
+        let _ = collab;
     }
 
     if request.messages.is_empty() {
@@ -637,6 +766,18 @@ async fn handle_chat_completions(
             return Err(ApiError::BadRequest(
                 "max_tokens must be positive".to_string(),
             ));
+        }
+    }
+
+    if let Some(ref rs) = request.response_schema {
+        if rs.name.is_empty()
+            || rs.name.len() > 64
+            || !rs
+                .name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(ApiError::InvalidResponseSchema);
         }
     }
 
@@ -681,12 +822,33 @@ async fn handle_chat_completions(
         conv.push_user(last.content.as_deref().unwrap_or(""));
     }
 
-    let llm_tools: Vec<ToolDefinition> = state
+    let mut llm_tools: Vec<ToolDefinition> = state
         .mcp_manager
         .all_tools()
         .iter()
         .map(|t| t.into())
         .collect();
+    if state.collaboration.is_some() {
+        llm_tools.push(crate::collaboration::tool::ask_agent_tool_definition());
+    }
+
+    let effective_schema = request
+        .response_schema
+        .as_ref()
+        .map(|rs| ResponseSchema {
+            name: rs.name.clone(),
+            description: rs.description.clone(),
+            schema: rs.schema.clone(),
+            strict: rs.strict,
+        })
+        .or_else(|| {
+            state.config.response_schema.as_ref().map(|rs| ResponseSchema {
+                name: rs.name.clone(),
+                description: rs.description.clone(),
+                schema: rs.schema.clone(),
+                strict: rs.strict,
+            })
+        });
 
     let chat_config = ChatConfig::new(state.config.model.clone())
         .with_temperature(request.temperature.unwrap_or(state.config.temperature));
@@ -696,11 +858,17 @@ async fn handle_chat_completions(
     } else {
         chat_config
     };
+    let chat_config = if let Some(schema) = effective_schema.clone() {
+        chat_config.with_response_schema(schema)
+    } else {
+        chat_config
+    };
 
     let completion_id = format!("chatcmpl-{}", Uuid::new_v4());
     let created = unix_timestamp();
     let mut total_usage = TokenUsage::default();
     let mut iterations: u32 = 0;
+    let mut ask_agent_calls: u32 = 0;
     let mut final_text = String::new();
     let mut finish_reason = "stop".to_string();
 
@@ -730,8 +898,12 @@ async fn handle_chat_completions(
                 let tool_calls = &response.tool_calls;
                 let results = execute_tools_parallel(
                     &state.mcp_manager,
+                    state.collaboration.as_ref(),
                     tool_calls,
                     state.config.tool_timeout,
+                    incoming_depth,
+                    &incoming_chain,
+                    &mut ask_agent_calls,
                 )
                 .await;
 
@@ -787,6 +959,18 @@ async fn handle_chat_completions(
             };
             finish_reason = "stop".to_string();
             break;
+        }
+    }
+
+    if effective_schema.is_some() && !final_text.is_empty() {
+        if serde_json::from_str::<serde_json::Value>(&final_text).is_err() {
+            if finish_reason == "length" {
+                return Err(ApiError::StructuredOutputTruncated);
+            }
+            return Err(ApiError::Internal(anyhow::anyhow!(
+                "LLM produced invalid JSON for structured output: {}",
+                final_text
+            )));
         }
     }
 
@@ -857,50 +1041,133 @@ async fn handle_chat_completions(
 
 async fn execute_tools_parallel(
     mcp: &McpManager,
+    collaboration: Option<&AgentCaller>,
     calls: &[ToolCall],
     timeout: std::time::Duration,
+    current_depth: u32,
+    current_chain: &[String],
+    ask_agent_calls: &mut u32,
 ) -> Vec<ToolResult> {
-    let futures: Vec<_> = calls
-        .iter()
-        .map(|call| {
+    let mut mcp_calls: Vec<(usize, ToolCall)> = Vec::new();
+    let mut agent_calls: Vec<(usize, ToolCall)> = Vec::new();
+
+    for (i, call) in calls.iter().enumerate() {
+        if call.name == "ask_agent" {
+            agent_calls.push((i, call.clone()));
+        } else {
+            mcp_calls.push((i, call.clone()));
+        }
+    }
+
+    let mut results: Vec<Option<ToolResult>> = vec![None; calls.len()];
+
+    let mcp_handles: Vec<_> = mcp_calls
+        .into_iter()
+        .map(|(idx, call)| {
             let mcp = mcp.clone();
-            let timeout = timeout;
-            let call = call.clone();
             tokio::spawn(async move {
                 let arguments = call.arguments.as_object().cloned();
-                match tokio::time::timeout(timeout, mcp.call_tool(&call.name, arguments)).await {
-                    Ok(Ok(result)) => {
-                        let text = crate::mcp::schema::tool_result_to_string(&result);
-                        ToolResult::success(call.id.clone(), text)
-                    }
-                    Ok(Err(e)) => ToolResult::error(
-                        call.id.clone(),
-                        format!("Tool '{}' failed: {}", call.name, e),
-                    ),
-                    Err(_) => ToolResult::error(
-                        call.id.clone(),
-                        format!(
-                            "Tool '{}' timed out after {}ms",
-                            call.name,
-                            timeout.as_millis()
+                let result =
+                    match tokio::time::timeout(timeout, mcp.call_tool(&call.name, arguments)).await
+                    {
+                        Ok(Ok(result)) => {
+                            let text = crate::mcp::schema::tool_result_to_string(&result);
+                            ToolResult::success(call.id.clone(), text)
+                        }
+                        Ok(Err(e)) => ToolResult::error(
+                            call.id.clone(),
+                            format!("Tool '{}' failed: {}", call.name, e),
                         ),
-                    ),
-                }
+                        Err(_) => ToolResult::error(
+                            call.id.clone(),
+                            format!(
+                                "Tool '{}' timed out after {}ms",
+                                call.name,
+                                timeout.as_millis()
+                            ),
+                        ),
+                    };
+                (idx, result)
             })
         })
         .collect();
 
-    let mut results = Vec::with_capacity(futures.len());
-    for future in futures {
-        match future.await {
-            Ok(result) => results.push(result),
-            Err(e) => results.push(ToolResult::error(
-                "unknown".to_string(),
-                format!("Task join error: {}", e),
-            )),
+    for handle in mcp_handles {
+        match handle.await {
+            Ok((idx, result)) => {
+                results[idx] = Some(result);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Tool task panicked");
+            }
         }
     }
+
+    for (idx, call) in agent_calls {
+        let max_per_turn = collaboration
+            .map(|c| c.max_calls_per_turn())
+            .unwrap_or(10);
+        if *ask_agent_calls >= max_per_turn {
+            results[idx] = Some(ToolResult::error(
+                call.id.clone(),
+                format!(
+                    "Call limit exceeded: {}/{} ask_agent calls this turn",
+                    ask_agent_calls, max_per_turn
+                ),
+            ));
+            continue;
+        }
+
+        let agent_name = call
+            .arguments
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let question = call
+            .arguments
+            .get("question")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if agent_name.is_empty() || question.is_empty() {
+            results[idx] = Some(ToolResult::error(
+                call.id.clone(),
+                "ask_agent requires both 'agent' and 'question' parameters".to_string(),
+            ));
+            continue;
+        }
+
+        let result = if let Some(collab) = collaboration {
+            match collab
+                .call(agent_name, question, current_depth, current_chain)
+                .await
+            {
+                Ok(content) => ToolResult::success(call.id.clone(), content),
+                Err(e) => ToolResult::error(call.id.clone(), e.to_string()),
+            }
+        } else {
+            ToolResult::error(
+                call.id.clone(),
+                "Collaboration is not configured".to_string(),
+            )
+        };
+        *ask_agent_calls += 1;
+        results[idx] = Some(result);
+    }
+
     results
+        .into_iter()
+        .enumerate()
+        .map(|(i, opt)| {
+            opt.unwrap_or_else(|| {
+                let call_id = calls
+                    .get(i)
+                    .map(|c| c.id.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
+                ToolResult::error(call_id, "Internal error: tool task panicked".to_string())
+            })
+        })
+        .collect()
 }
 
 // 6.2 SSE Streaming Implementation

@@ -28,6 +28,9 @@ pub struct AgentConfig {
     pub system_prompt: String,
 
     #[serde(default)]
+    pub learning_prompt: Option<String>,
+
+    #[serde(default)]
     pub mcp_servers: HashMap<String, McpServerConfig>,
 
     #[serde(default)]
@@ -62,6 +65,25 @@ pub struct AgentConfig {
 
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
+
+    #[serde(default)]
+    pub response_schema: Option<ResponseSchemaConfig>,
+
+    #[serde(default)]
+    pub collaboration: Option<CollaborationConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResponseSchemaConfig {
+    pub name: String,
+
+    #[serde(default)]
+    pub description: Option<String>,
+
+    pub schema: serde_json::Value,
+
+    #[serde(default = "default_true")]
+    pub strict: bool,
 }
 
 fn default_max_iterations() -> u32 {
@@ -408,6 +430,66 @@ pub enum ConfigError {
 
     #[error("Environment variable '{var}' referenced in config but not set.")]
     MissingEnvVar { var: String },
+
+    #[error(
+        "Invalid response_schema name '{name}': \
+         must match [a-zA-Z0-9_-] and be at most 64 characters"
+    )]
+    InvalidResponseSchemaName { name: String },
+
+    #[error(
+        "response_schema with strict=true requires top-level \
+         \"type\": \"object\" in the schema"
+    )]
+    StrictSchemaNotObject,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CollaborationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default = "default_allowed_agents")]
+    pub allowed_agents: AllowedAgents,
+
+    #[serde(default = "default_max_depth")]
+    pub max_depth: u32,
+
+    #[serde(default = "default_collab_timeout")]
+    pub timeout_secs: u64,
+
+    #[serde(default = "default_max_calls_per_turn")]
+    pub max_calls_per_turn: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum AllowedAgents {
+    List(Vec<String>),
+    All(String),
+}
+
+impl AllowedAgents {
+    pub fn is_allowed(&self, name: &str) -> bool {
+        match self {
+            AllowedAgents::All(s) if s == "all" => true,
+            AllowedAgents::All(_) => false,
+            AllowedAgents::List(list) => list.iter().any(|n| n == name),
+        }
+    }
+}
+
+fn default_allowed_agents() -> AllowedAgents {
+    AllowedAgents::All("all".to_string())
+}
+fn default_max_depth() -> u32 {
+    3
+}
+fn default_collab_timeout() -> u64 {
+    120
+}
+fn default_max_calls_per_turn() -> u32 {
+    10
 }
 
 const KNOWN_PROFILES: &[&str] = &[
@@ -479,6 +561,27 @@ impl AgentConfig {
 
         if self.max_iterations < 1 {
             return Err(ConfigError::InvalidMaxIterations);
+        }
+
+        if let Some(ref rs) = self.response_schema {
+            if rs.name.is_empty()
+                || rs.name.len() > 64
+                || !rs.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                return Err(ConfigError::InvalidResponseSchemaName {
+                    name: rs.name.clone(),
+                });
+            }
+            if rs.strict {
+                let is_object = rs
+                    .schema
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .map_or(false, |t| t == "object");
+                if !is_object {
+                    return Err(ConfigError::StrictSchemaNotObject);
+                }
+            }
         }
 
         if let Some(ref curriculum) = self.curriculum {

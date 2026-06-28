@@ -14,6 +14,8 @@ pub struct AgentConfig {
     #[serde(default)]
     pub system_prompt: String,
     #[serde(default)]
+    pub learning_prompt: Option<String>,
+    #[serde(default)]
     pub mcp_servers: HashMap<String, McpServerEntry>,
     #[serde(default)]
     pub curriculum: CurriculumConfig,
@@ -25,6 +27,20 @@ pub struct AgentConfig {
     pub routing: Option<RoutingConfig>,
     #[serde(default)]
     pub pricing: HashMap<String, PricingOverride>,
+    #[serde(default)]
+    pub response_schema: Option<ResponseSchemaConfig>,
+    #[serde(default)]
+    pub collaboration: Option<CollaborationConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseSchemaConfig {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub schema: serde_json::Value,
+    #[serde(default = "default_true")]
+    pub strict: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -126,6 +142,44 @@ pub struct PricingOverride {
     pub output_per_million: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollaborationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default = "default_allowed_agents")]
+    pub allowed_agents: AllowedAgents,
+
+    #[serde(default = "default_max_depth")]
+    pub max_depth: u32,
+
+    #[serde(default = "default_collab_timeout")]
+    pub timeout_secs: u64,
+
+    #[serde(default = "default_max_calls_per_turn")]
+    pub max_calls_per_turn: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AllowedAgents {
+    List(Vec<String>),
+    All(String),
+}
+
+fn default_allowed_agents() -> AllowedAgents {
+    AllowedAgents::All("all".to_string())
+}
+fn default_max_depth() -> u32 {
+    3
+}
+fn default_collab_timeout() -> u64 {
+    120
+}
+fn default_max_calls_per_turn() -> u32 {
+    10
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SyncConfig {
     #[serde(default = "default_sync_interval")]
@@ -205,7 +259,7 @@ pub fn resolve_api_key(model: &str) -> (String, bool) {
     } else if model.starts_with("bedrock/") {
         "AWS_ACCESS_KEY_ID"
     } else if model.starts_with("vertex/") {
-        "GOOGLE_APPLICATION_CREDENTIALS"
+        "VERTEX_API_KEY"
     } else if model.starts_with("azure/") {
         "AZURE_OPENAI_API_KEY"
     } else {
