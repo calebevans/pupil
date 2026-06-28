@@ -110,7 +110,7 @@ Set the appropriate API key environment variable for your chosen model (e.g. `AN
 
 ## Example
 
-The [`examples/astronomy-agent`](examples/astronomy-agent) directory contains a complete working agent that learns introductory astronomy from the [OpenStax Astronomy 2e](https://openstax.org/details/books/astronomy-2e/) textbook (CC-BY 4.0). It uses 30 chapter summary URLs as curriculum and includes a self-test with 10 questions for the build cycle. A separate `benchmark/mmlu-astronomy.yaml` file contains 152 questions from the [MMLU benchmark](https://huggingface.co/datasets/cais/mmlu) for standardized evaluation after the build.
+The [`examples/astronomy-agent`](examples/astronomy-agent) directory contains a complete working agent that learns introductory astronomy from the [OpenStax Astronomy 2e](https://openstax.org/details/books/astronomy-2e/) textbook (CC-BY 4.0). It uses 30 full chapter URLs as curriculum and includes a self-test with 29 questions for the build cycle. A separate `benchmark/mmlu-astronomy.yaml` file contains 152 questions from the [MMLU benchmark](https://huggingface.co/datasets/cais/mmlu) for standardized evaluation after the build.
 
 ```bash
 cd examples/astronomy-agent
