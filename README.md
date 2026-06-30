@@ -110,18 +110,19 @@ Set the appropriate API key environment variable for your chosen model (e.g. `AN
 
 ## Example
 
-The [`examples/astronomy-agent`](examples/astronomy-agent) directory contains a complete working agent that learns introductory astronomy from the [OpenStax Astronomy 2e](https://openstax.org/details/books/astronomy-2e/) textbook (CC-BY 4.0). It uses 30 full chapter URLs as curriculum and includes a self-test with 29 questions for the build cycle. A separate `benchmark/mmlu-astronomy.yaml` file contains 152 questions from the [MMLU benchmark](https://huggingface.co/datasets/cais/mmlu) for standardized evaluation after the build.
+The [`examples/phantomwiki-agent`](examples/phantomwiki-agent) directory contains a complete working agent evaluated against the [PhantomWiki](https://arxiv.org/abs/2502.20377) benchmark (ICML 2025). PhantomWiki generates fictional wiki articles about made-up characters, then tests whether systems can answer questions about them. Since the characters don't exist, any correct answer must come from learned knowledge, not the model's training data.
 
 ```bash
-cd examples/astronomy-agent
+cd examples/phantomwiki-agent
+./setup.sh          # downloads the dataset
 pupil build
 pupil run
 
-# Run the MMLU benchmark against the built agent
-pupil test --file benchmark/mmlu-astronomy.yaml
+# Run the PhantomWiki benchmark against the built agent
+pupil test --file benchmark/phantomwiki.yaml
 ```
 
-After learning the textbook, the agent scores **142/152 (93.4%)** on the MMLU Astronomy benchmark. See [Benchmark Results](docs/benchmark.md) for methodology, reproduction steps, and limitations.
+On the PhantomWiki n=50 benchmark (112 questions, depth 1-4), a Pupil agent using Gemini 2.5 Flash scores **56.2% pass rate**. For context, the PhantomWiki paper reports F1 scores of 52.4% for DeepSeek-R1-32B and 50.7% for GPT-4o using Chain-of-Thought, and 30.9% for Gemini 1.5 Flash using ReAct. Note that pass rate and F1 are different metrics, so these numbers are not directly comparable. See [Benchmark Results](docs/benchmark.md) for methodology, caveats, and reproduction steps.
 
 ## Documentation
 
@@ -129,7 +130,7 @@ After learning the textbook, the agent scores **142/152 (93.4%)** on the MMLU As
 - [Configuration Reference](docs/configuration.md) -- `pupil.yaml`, `tests.yaml`, global config, environment variables
 - [Architecture](docs/architecture.md) -- two-crate design, container strategy, learning pipeline
 - [Testing](docs/testing.md) -- writing tests, assertion types, self-test during build
-- [Benchmark Results](docs/benchmark.md) -- MMLU Astronomy evaluation, methodology, reproduction
+- [Benchmark Results](docs/benchmark.md) -- PhantomWiki evaluation, methodology, reproduction
 - [Glossary](docs/GLOSSARY.md) -- terminology and definitions
 
 ## License

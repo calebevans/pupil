@@ -136,7 +136,7 @@ Alphabetical reference of domain-specific terms, components, commands, configura
 
 **learning_prompt** - A `pupil.yaml` per-source config field for custom learning guidelines text. Replaces only the Guidelines section of the learning prompt; base instructions are always prepended. Mutually exclusive with `learning_profile`.
 
-**Live Source Sync** - The feature that periodically re-crawls URL-based curriculum sources and updates the agent's knowledge in-place without a full manual rebuild. See `pupil sync`.
+**Live Source Sync** - The feature that periodically re-crawls URL curriculum sources and updates the agent's knowledge in-place without a full manual rebuild. See `pupil sync`.
 
 **LLM classifier (routing)** - A routing strategy that asks an LLM to select the best agent given a query and the list of agent descriptions. Most accurate but slowest and most expensive.
 
@@ -288,7 +288,7 @@ Alphabetical reference of domain-specific terms, components, commands, configura
 
 ## W
 
-**Webhook strategy** - A push-based sync change detection strategy. The sync daemon listens for incoming webhooks from source platforms (Confluence, GitHub). Combined with periodic polling as a consistency safety net.
+**Webhook strategy** - A push sync change detection strategy. The sync daemon listens for incoming webhooks from source platforms (Confluence, GitHub). Combined with periodic polling as a consistency safety net.
 
 **webhook_listen** - A sync config field (e.g., `"0.0.0.0:9090"`) specifying the listen address for incoming webhook notifications.
 
@@ -332,7 +332,7 @@ Alphabetical reference of domain-specific terms, components, commands, configura
 
 **pupil status** - Shows agent information including build details, memory count, runtime usage (queries, tokens, cost), sync status, and latency metrics.
 
-**pupil sync** - Checks URL-based curriculum sources for changes and re-learns any that changed. Supports `--force`, `--dry-run`, `--source`, `--json`, and `--daemon` for continuous scheduled sync.
+**pupil sync** - Checks URL curriculum sources for changes and re-learns any that changed. Supports `--force`, `--dry-run`, `--source`, `--json`, and `--daemon` for continuous scheduled sync.
 
 **pupil teach** - Adds content to the curriculum by copying files into `curriculum/` or recording URLs in the config. Supports `--url`, `--recursive`, `--glob`, and `--dry-run`.
 

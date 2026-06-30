@@ -14,7 +14,7 @@ The testing framework asks your agent questions and checks the responses against
 
 Tests run inside the agent's container. The CLI starts the container, sends the test file to the in-container test runner, collects JSON results, and reports them.
 
-For a complete working example, see [`examples/astronomy-agent/tests.yaml`](../examples/astronomy-agent/tests.yaml). The same directory also includes `benchmark/mmlu-astronomy.yaml` with 152 MMLU questions for standardized evaluation.
+For a complete working example, see [`examples/phantomwiki-agent/tests.yaml`](../examples/phantomwiki-agent/tests.yaml). The same directory also includes `benchmark/phantomwiki.yaml` with 112 PhantomWiki questions for standardized evaluation (see [Benchmark](benchmark.md)).
 
 ## Writing tests
 
