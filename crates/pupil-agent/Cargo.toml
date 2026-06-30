@@ -87,6 +87,9 @@ backoff = { version = "0.4", features = ["tokio"] }
 # --- Encoding ---
 base64 = "0.22"
 
+# --- Google Cloud auth (ADC token refresh for Vertex AI) ---
+gcp_auth = "0.12"
+
 # --- Learning dependencies (behind `learn` feature flag) ---
 pulldown-cmark = { version = "0.13", optional = true }
 pdf-extract = { version = "0.10", optional = true }

@@ -20,14 +20,51 @@ const MEMORY_INSTRUCTIONS_TEMPLATE: &str = "\
 You have access to a memory system (recalld) that stores knowledge \
 you have been taught.
 
-Before answering any question:
-1. Use recall_memories with namespace \"{namespace}\" to search for relevant knowledge
-2. If results are found, use them to inform your response
-3. If no results are found, say so honestly
+## How to search your memory
+
+Use recall_memories to search. Available parameters:
+
+- **query** (required): Natural language search query. Rephrase the question \
+  to focus on the key fact you need.
+- **namespace**: Use \"{namespace}\".
+- **entities**: Filter to memories mentioning these people, places, or proper nouns. \
+  Always pass entity names when the question is about specific individuals.
+- **topics**: Filter by subject area (lowercase keywords like \"family\", \"occupation\").
+- **tags**: Filter by structured tags (e.g., \"source/filename.md\", \"type/relationship\").
+- **depth**: Graph hops (0-3). Use 1 or 2 to find connected memories. Critical for \
+  questions that span multiple facts.
+- **limit**: Number of results (default 10, max 100). Increase for broad searches.
+- **compact**: Set to false to get full metadata including graph edges and scores.
+
+## Search strategy
+
+1. Always include entity names in the entities filter when asking about specific people or things.
+2. Use depth 1-2 to follow graph connections between related memories.
+3. For chain questions (\"Who is the X of the Y of Z?\"), search step by step:
+   - Search for Z to find Y's name
+   - Search for Y to find X's name
+   - Each search should use the entity filter with the name you found
+4. Make multiple recall_memories calls when needed. Each call can target a different angle.
+5. If the first search returns nothing, try rephrasing or broadening the query.
+
+## Other useful tools
+
+- **list_memories**: Browse memories by entity or tag filter without a search query. \
+  Use when you need to enumerate (e.g., \"list all people\" or \"what sources were learned\").
+- **reinforce_memory**: After using a memory to answer a question, call reinforce_memory \
+  with the memory's ID and quality=4 to strengthen it for future recall.
+- **get_memory**: Retrieve a specific memory by ID if you have one from a previous search.
+
+## After searching
+
+- Synthesize results into a natural response
+- If nothing found, say so honestly
+- Never guess or fabricate information
+- Reinforce memories that were useful (call reinforce_memory with quality 3 or 4)
 
 When you learn something new from the user:
-- Use store_memory with namespace \"{namespace}\" to save it for future reference
-- Include relevant entities, topics, and tags";
+- Use store_memory with namespace \"{namespace}\"
+- Include all relevant entities, topics, and tags";
 
 const RESPONSE_GUIDELINES: &str = "\
 - Ground your answers in retrieved knowledge when available

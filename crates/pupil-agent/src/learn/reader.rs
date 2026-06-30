@@ -148,7 +148,7 @@ fn split_at_paragraphs(text: &str, max_chars: usize) -> Vec<(usize, usize)> {
     let paragraph_breaks: Vec<usize> = text.match_indices("\n\n").map(|(idx, _)| idx).collect();
 
     if paragraph_breaks.is_empty() {
-        return hard_split(text.len(), max_chars);
+        return hard_split_str(text, max_chars);
     }
 
     let mut last_break = 0;
@@ -160,7 +160,8 @@ fn split_at_paragraphs(text: &str, max_chars: usize) -> Vec<(usize, usize)> {
                 sections.push((current_start, last_break));
                 current_start = last_break;
             } else {
-                let hard = hard_split(break_pos - current_start, max_chars);
+                let segment = &text[current_start..break_pos];
+                let hard = hard_split_str(segment, max_chars);
                 for (s, e) in hard {
                     sections.push((current_start + s, current_start + e));
                 }
@@ -182,11 +183,15 @@ fn split_at_paragraphs(text: &str, max_chars: usize) -> Vec<(usize, usize)> {
 }
 
 #[cfg(feature = "learn")]
-fn hard_split(total_len: usize, max_chars: usize) -> Vec<(usize, usize)> {
+fn hard_split_str(text: &str, max_chars: usize) -> Vec<(usize, usize)> {
     let mut sections = Vec::new();
     let mut start = 0;
+    let total_len = text.len();
     while start < total_len {
-        let end = (start + max_chars).min(total_len);
+        let mut end = (start + max_chars).min(total_len);
+        while end < total_len && !text.is_char_boundary(end) {
+            end -= 1;
+        }
         sections.push((start, end));
         start = end;
     }

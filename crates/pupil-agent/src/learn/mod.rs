@@ -16,6 +16,8 @@ pub mod learner;
 pub mod prompt;
 #[cfg(feature = "learn")]
 pub mod manifest;
+#[cfg(feature = "learn")]
+pub mod verifier;
 
 #[cfg(feature = "learn")]
 use crate::config::AgentConfig;
@@ -62,6 +64,8 @@ pub struct LearningSummary {
     pub sources_skipped: usize,
     pub total_memories_created: usize,
     pub total_memories_forgotten: usize,
+    pub total_facts_verified: usize,
+    pub total_facts_retrievable: usize,
     pub source_results: Vec<SourceLearnResult>,
 }
 
@@ -73,6 +77,8 @@ pub struct SourceLearnResult {
     pub memories_created: usize,
     pub memories_forgotten: usize,
     pub memory_ids: Vec<String>,
+    pub verification_total: usize,
+    pub verification_retrievable: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,6 +249,8 @@ pub async fn run_learning(
                 memories_created: 0,
                 memories_forgotten: forgotten_count,
                 memory_ids: vec![],
+                verification_total: 0,
+                verification_retrievable: 0,
             });
         }
     }
@@ -268,11 +276,17 @@ pub async fn run_learning(
     let total_memories_forgotten: usize =
         source_results.iter().map(|r| r.memories_forgotten).sum();
 
+    let total_facts_verified: usize = source_results.iter().map(|r| r.verification_total).sum();
+    let total_facts_retrievable: usize =
+        source_results.iter().map(|r| r.verification_retrievable).sum();
+
     Ok(LearningSummary {
         sources_learned,
         sources_skipped,
         total_memories_created,
         total_memories_forgotten,
+        total_facts_verified,
+        total_facts_retrievable,
         source_results,
     })
 }
@@ -304,12 +318,16 @@ async fn handle_forget_source(
         sources_skipped: 0,
         total_memories_created: 0,
         total_memories_forgotten: forgotten_count,
+        total_facts_verified: 0,
+        total_facts_retrievable: 0,
         source_results: vec![SourceLearnResult {
             source_key: source_key.to_string(),
             action: LearnAction::Forgotten,
             memories_created: 0,
             memories_forgotten: forgotten_count,
             memory_ids: vec![],
+            verification_total: 0,
+            verification_retrievable: 0,
         }],
     })
 }
@@ -374,6 +392,8 @@ async fn process_source(
                 memories_created: 0,
                 memories_forgotten: 0,
                 memory_ids: vec![],
+                verification_total: 0,
+                verification_retrievable: 0,
             });
         }
     };
@@ -390,6 +410,8 @@ async fn process_source(
                     memories_created: 0,
                     memories_forgotten: 0,
                     memory_ids: manifest.memory_ids(source_key).to_vec(),
+                    verification_total: 0,
+                    verification_retrievable: 0,
                 });
             }
             Some(false) => {
@@ -402,17 +424,31 @@ async fn process_source(
                     "Re-learning changed source"
                 );
 
-                let sections = reader::split_into_sections(&extracted, None);
+                let sections = reader::split_into_sections(&extracted, config.curriculum.as_ref().and_then(|c| c.max_section_chars));
                 let learning_result =
                     learner::learn_source(llm, mcp, &sections, &learning_prompt, source_key, namespace)
                         .await?;
+
+                let synthesis_prompt = prompt::build_synthesis_prompt(source_key, namespace);
+                let synthesis_result = learner::synthesize_relationships(
+                    llm,
+                    mcp,
+                    &learning_result.memory_ids,
+                    &synthesis_prompt,
+                    source_key,
+                    namespace,
+                )
+                .await?;
+
+                let mut all_memory_ids = learning_result.memory_ids;
+                all_memory_ids.extend(synthesis_result.memory_ids);
 
                 manifest.upsert_source(
                     source_key.clone(),
                     SourceEntry {
                         content_hash,
                         prompt_hash,
-                        memory_ids: learning_result.memory_ids.clone(),
+                        memory_ids: all_memory_ids.clone(),
                         last_learned: now_utc_iso8601(),
                         sync: None,
                     },
@@ -421,9 +457,11 @@ async fn process_source(
                 return Ok(SourceLearnResult {
                     source_key: source_key.clone(),
                     action: LearnAction::Relearned,
-                    memories_created: learning_result.memory_ids.len(),
+                    memories_created: all_memory_ids.len(),
                     memories_forgotten: forgotten_count,
-                    memory_ids: learning_result.memory_ids,
+                    memory_ids: all_memory_ids,
+                    verification_total: 0,
+                    verification_retrievable: 0,
                 });
             }
             None => {
@@ -433,17 +471,31 @@ async fn process_source(
     }
 
     // New source (or force_relearn): learn it
-    let sections = reader::split_into_sections(&extracted, None);
+    let sections = reader::split_into_sections(&extracted, config.curriculum.as_ref().and_then(|c| c.max_section_chars));
     let learning_result =
         learner::learn_source(llm, mcp, &sections, &learning_prompt, source_key, namespace)
             .await?;
+
+    let synthesis_prompt = prompt::build_synthesis_prompt(source_key, namespace);
+    let synthesis_result = learner::synthesize_relationships(
+        llm,
+        mcp,
+        &learning_result.memory_ids,
+        &synthesis_prompt,
+        source_key,
+        namespace,
+    )
+    .await?;
+
+    let mut all_memory_ids = learning_result.memory_ids;
+    all_memory_ids.extend(synthesis_result.memory_ids);
 
     manifest.upsert_source(
         source_key.clone(),
         SourceEntry {
             content_hash,
             prompt_hash,
-            memory_ids: learning_result.memory_ids.clone(),
+            memory_ids: all_memory_ids.clone(),
             last_learned: now_utc_iso8601(),
             sync: None,
         },
@@ -452,9 +504,11 @@ async fn process_source(
     Ok(SourceLearnResult {
         source_key: source_key.clone(),
         action: LearnAction::Learned,
-        memories_created: learning_result.memory_ids.len(),
+        memories_created: all_memory_ids.len(),
         memories_forgotten: 0,
-        memory_ids: learning_result.memory_ids,
+        memory_ids: all_memory_ids,
+        verification_total: 0,
+        verification_retrievable: 0,
     })
 }
 

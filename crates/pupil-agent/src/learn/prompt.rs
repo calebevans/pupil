@@ -10,11 +10,17 @@ Store what you learn as memories using the store_memory tool.
 
 When using store_memory:
 - summary: A specific, searchable description of the knowledge (max 2000 chars). \
-Write it as something a person would search for.
-- fullText: Detailed content. Include reasoning, context, and specifics that the summary cannot capture. \
-Omit only if the summary is fully self-contained.
-- entities: ALL proper nouns -- people, tools, systems, organizations, product names. These power the knowledge graph.
-- topics: 1-5 lowercase keywords describing the subject area (e.g., \"deployment\", \"authentication\").
+Write it so someone could find it by searching for the key concepts or names.
+- fullText: Detailed content with all specifics. Include exact names, numbers, dates, \
+and relationships. This field powers semantic search, so be thorough. \
+Omit only if the summary captures everything.
+- entities: EVERY proper noun mentioned in the memory. People's full names, places, \
+organizations, product names. This enables entity-filtered search. For content about \
+people and relationships, include the full name of EVERY person referenced, not just \
+the primary subject. Missing an entity means the memory cannot be found when filtering by that name.
+- topics: 1-5 lowercase keywords for the subject area. Use consistent topic names \
+across related memories (e.g., always \"family\" for family relationships, \"occupation\" for jobs, \
+\"friendship\" for friend connections). These enable topic-filtered search.
 - tags: Hierarchical categorization. Always include source/<filename>. \
 Add type/<concept|procedure|reference|definition|relationship|faq|troubleshooting|policy|decision|breaking-change> as appropriate.
 - parentId: If this memory is logically a child of another memory you already stored, pass the parent's ID.
@@ -27,6 +33,20 @@ When using recall_memories:
 When using find_similar_memories:
 - After storing a memory, optionally check for near-duplicates.
 - If a duplicate is found (similarity > 0.90), consider whether both are needed or one should supersede the other.
+
+## CRITICAL: Always include entities
+
+The entities field is REQUIRED for every store_memory call. Without entities, the memory \
+cannot be found by entity-filtered search. Every call to store_memory MUST include an \
+entities array with every proper noun mentioned in the summary or fullText.
+
+Example of a correct store_memory call:
+- summary: \"Alice Smith is married to Bob Smith and they have a daughter named Carol Smith.\"
+- fullText: \"Alice Smith married Bob Smith in 2010. Their daughter Carol Smith was born in 2012.\"
+- entities: [\"Alice Smith\", \"Bob Smith\", \"Carol Smith\"]
+- topics: [\"family\", \"marriage\"]
+
+A call without entities is WRONG and will make the memory unfindable.
 
 ## Important Constraints
 
@@ -116,6 +136,48 @@ pub fn build_learning_prompt(
     format!(
         "{}\n\n## Guidelines\n\n{}\n\nSource: {}\nCurriculum: {}\nNamespace: {}",
         BASE_INSTRUCTIONS, guidelines, vars.source_file, vars.agent_name, vars.namespace,
+    )
+}
+
+#[cfg(feature = "learn")]
+const SYNTHESIS_INSTRUCTIONS: &str = "\
+You are a knowledge synthesis agent. You have already read and stored memories from \
+source material. Your job now is to discover relationships between the memories you \
+stored and create new memories that explicitly capture those relationships.
+
+## What to look for
+
+- Transitive relationships: A is related to B, B is related to C, therefore A is \
+connected to C through B. Create a memory that makes this chain explicit.
+- Shared entities: Two memories mention the same person, system, or concept in \
+different contexts. Create a memory that summarizes that entity's full role.
+- Contradictions or tensions: Two memories that seem to conflict. Create a memory \
+noting the contradiction and any resolution.
+- Cause-effect chains: Event A led to B which caused C. Create a memory that \
+captures the full causal chain.
+- Hierarchical summaries: Several memories that are facets of one larger concept. \
+Create a summary memory that ties them together.
+
+## Rules
+
+- Use find_similar_memories with each memory ID to discover related memories. \
+Set minScore to 0.5 to cast a wide net.
+- Only create a relationship memory when the connection is genuinely useful and not \
+obvious from either memory alone.
+- Tag relationship memories with type/relationship and include the source tag from \
+the original memories.
+- Set entities on relationship memories to include ALL entities from the memories \
+being linked.
+- Do NOT re-store existing facts. Only store NEW observations about how facts relate.
+- Before storing, use recall_memories to check if the relationship is already captured.
+- If you find no meaningful relationships for a batch, say so and move on. Do not \
+force connections.";
+
+#[cfg(feature = "learn")]
+pub fn build_synthesis_prompt(source_key: &str, namespace: &str) -> String {
+    format!(
+        "{}\n\nSource: {}\nNamespace: {}",
+        SYNTHESIS_INSTRUCTIONS, source_key, namespace,
     )
 }
 

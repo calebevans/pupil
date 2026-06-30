@@ -1430,12 +1430,13 @@ async fn start_test_container(
     agent_dir: &Path,
     test_file_path: &Path,
 ) -> Result<container::ContainerId, CliError> {
-    let (key_name, key_set) = resolve_api_key(&config.model);
+    let (key_name, _key_set) = resolve_api_key(&config.model);
     let mut env_vars = HashMap::new();
-    if key_set {
-        if let Ok(val) = std::env::var(&key_name) {
-            env_vars.insert(key_name.clone(), val);
-        }
+
+    if key_name == "VERTEX_API_KEY" {
+        crate::agent_config::resolve_vertex_env(&mut env_vars);
+    } else if let Ok(val) = std::env::var(&key_name) {
+        env_vars.insert(key_name.clone(), val);
     }
 
     // Also forward keys for common providers the judge might use
@@ -1455,12 +1456,16 @@ async fn start_test_container(
         }
     }
 
-    // Forward Ollama host for embeddings
-    env_vars.insert(
-        "OLLAMA_BASE_URL".to_string(),
-        std::env::var("OLLAMA_BASE_URL")
-            .unwrap_or_else(|_| "http://host.docker.internal:11434".to_string()),
-    );
+    // Forward Ollama host and recalld embedding config
+    let ollama_url = std::env::var("OLLAMA_BASE_URL")
+        .unwrap_or_else(|_| "http://host.docker.internal:11434".to_string());
+    env_vars.insert("OLLAMA_BASE_URL".to_string(), ollama_url.clone());
+    env_vars.insert("RECALLD_EMBEDDING_PROVIDER".to_string(), "ollama".to_string());
+    env_vars.insert("RECALLD_EMBEDDING_MODEL".to_string(), "embeddinggemma:latest".to_string());
+    env_vars.insert("RECALLD_EMBEDDING_BASE_URL".to_string(), ollama_url);
+    env_vars.insert("RECALLD_EMBEDDING_DIMENSIONS".to_string(), "768".to_string());
+    env_vars.insert("RECALLD_STORAGE_DATA_DIR".to_string(), "/data/recalld".to_string());
+    env_vars.insert("RECALLD_DAEMON_SOCKET".to_string(), "/data/recalld/recalld.sock".to_string());
 
     let config_path = agent_dir.join("pupil.yaml").canonicalize().map_err(|e| {
         CliError::Io(e)
@@ -1469,13 +1474,30 @@ async fn start_test_container(
         CliError::Io(e)
     })?;
 
+    let mut test_volumes = vec![
+        format!("{}:/tmp/pupil.yaml:ro", config_path.display()),
+        format!("{}:/tmp/tests.yaml:ro", test_path.display()),
+    ];
+
+    let gcp_creds_path = dirs::home_dir()
+        .map(|h| h.join(".config/gcloud/application_default_credentials.json"));
+    if let Some(ref creds) = gcp_creds_path {
+        if creds.exists() {
+            test_volumes.push(format!(
+                "{}:/tmp/gcp-credentials.json:ro",
+                creds.to_string_lossy()
+            ));
+            env_vars.insert(
+                "GOOGLE_APPLICATION_CREDENTIALS".to_string(),
+                "/tmp/gcp-credentials.json".to_string(),
+            );
+        }
+    }
+
     let opts = RunOptions {
         read_only: false,
         tmpfs: vec![],
-        volumes: vec![
-            format!("{}:/tmp/pupil.yaml:ro", config_path.display()),
-            format!("{}:/tmp/tests.yaml:ro", test_path.display()),
-        ],
+        volumes: test_volumes,
         cap_drop_all: false,
         extra_flags: vec!["--user".to_string(), "root".to_string()],
         env: env_vars,
@@ -1980,6 +2002,14 @@ pub async fn execute(args: TestArgs) -> Result<(), CliError> {
     // 8. Parse results
     let results: Vec<TestResult> = match output {
         Ok(ref out) => {
+            if !out.stderr.is_empty() {
+                tracing::debug!(stderr = %out.stderr, "Container test stderr");
+            }
+            eprintln!("[DEBUG] Raw stdout length: {}", out.stdout.len());
+            if let Some(first_test) = out.stdout.find("\"response\"") {
+                let snippet = &out.stdout[first_test..out.stdout.len().min(first_test + 800)];
+                eprintln!("[DEBUG] First response: ...{}", snippet);
+            }
             let raw: serde_json::Value = serde_json::from_str(&out.stdout).map_err(|e| {
                 CliError::ConfigInvalid {
                     message: format!("Failed to parse test results from container: {e}"),

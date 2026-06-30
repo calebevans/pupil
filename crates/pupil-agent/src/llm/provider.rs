@@ -23,11 +23,12 @@ pub struct ParsedModel {
 }
 
 pub fn parse_model_string(model: &str) -> Result<ParsedModel, LlmError> {
-    // openai-compat:base_url/model
+    // openai-compat:<base_url>@<model> or openai-compat:<base_url>/<model>
     if let Some(rest) = model.strip_prefix("openai-compat:") {
-        if let Some(last_slash) = rest.rfind('/') {
-            let base_url = rest[..last_slash].to_string();
-            let model_name = rest[last_slash + 1..].to_string();
+        let split_pos = rest.find('@').or_else(|| rest.rfind('/'));
+        if let Some(pos) = split_pos {
+            let base_url = rest[..pos].to_string();
+            let model_name = rest[pos + 1..].to_string();
             if base_url.is_empty() || model_name.is_empty() {
                 return Err(LlmError::UnknownModelFormat {
                     model: model.to_string(),

@@ -93,6 +93,7 @@ struct McpManagerInner {
     servers: tokio::sync::Mutex<HashMap<String, RunningService<RoleClient, Box<dyn DynService<RoleClient>>>>>,
     tool_index: HashMap<String, String>,
     tools: Vec<ToolDefinition>,
+    tool_filters: HashMap<String, config::ToolFilter>,
     cancel_token: CancellationToken,
 }
 
@@ -262,8 +263,12 @@ impl McpManager {
 
                 tool_index.insert(display_name.clone(), server_name.clone());
 
-                let schema_value = serde_json::to_value(&*tool.input_schema)
+                let mut schema_value = serde_json::to_value(&*tool.input_schema)
                     .unwrap_or_else(|_| serde_json::json!({"type": "object"}));
+
+                if display_name == "store_memory" {
+                    promote_to_required(&mut schema_value, &["entities", "topics"]);
+                }
 
                 tools.push(ToolDefinition {
                     name: display_name,
@@ -282,11 +287,24 @@ impl McpManager {
             "MCP manager initialized"
         );
 
+        let mut tool_filters = HashMap::new();
+        for (name, cfg) in configs {
+            if let Some(ref filters) = cfg.tools {
+                for (stage, filter) in filters {
+                    tool_filters.insert(
+                        format!("{}:{}", name, stage),
+                        filter.clone(),
+                    );
+                }
+            }
+        }
+
         Ok(Self {
             inner: std::sync::Arc::new(McpManagerInner {
                 servers: tokio::sync::Mutex::new(servers),
                 tool_index,
                 tools,
+                tool_filters,
                 cancel_token,
             }),
         })
@@ -294,6 +312,30 @@ impl McpManager {
 
     pub fn all_tools(&self) -> &[ToolDefinition] {
         &self.inner.tools
+    }
+
+    pub fn tools_for_stage(&self, stage: &str) -> Vec<&ToolDefinition> {
+        let allowed: Option<std::collections::HashSet<&str>> = {
+            let mut names = None;
+            for (key, filter) in &self.inner.tool_filters {
+                if key.ends_with(&format!(":{}", stage)) {
+                    match filter {
+                        config::ToolFilter::All(s) if s == "all" => return self.inner.tools.iter().collect(),
+                        config::ToolFilter::List(list) => {
+                            let set = names.get_or_insert_with(std::collections::HashSet::new);
+                            set.extend(list.iter().map(|s| s.as_str()));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            names
+        };
+
+        match allowed {
+            Some(set) => self.inner.tools.iter().filter(|t| set.contains(t.name.as_str())).collect(),
+            None => self.inner.tools.iter().collect(),
+        }
     }
 
     pub async fn call_tool(
@@ -423,6 +465,23 @@ impl McpManager {
     }
 }
 
+fn promote_to_required(schema: &mut serde_json::Value, fields: &[&str]) {
+    if let Some(obj) = schema.as_object_mut() {
+        let required = obj
+            .entry("required")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut();
+        if let Some(arr) = required {
+            for field in fields {
+                let val = serde_json::Value::String(field.to_string());
+                if !arr.contains(&val) {
+                    arr.push(val);
+                }
+            }
+        }
+    }
+}
+
 pub fn spawn_health_check_task(
     manager: McpManager,
     cancel_token: CancellationToken,
@@ -504,6 +563,7 @@ mod tests {
                 args: vec!["--name".to_string(), "echo".to_string()],
                 env: HashMap::new(),
                 required: false,
+                tools: None,
             },
         );
         configs.insert(
@@ -513,6 +573,7 @@ mod tests {
                 args: vec!["--name".to_string(), "echo".to_string()],
                 env: HashMap::new(),
                 required: false,
+                tools: None,
             },
         );
 
@@ -539,6 +600,7 @@ mod tests {
                 args: vec![],
                 env: HashMap::new(),
                 required: true,
+                tools: None,
             },
         );
 
@@ -561,6 +623,7 @@ mod tests {
                 args: vec![],
                 env: HashMap::new(),
                 required: false,
+                tools: None,
             },
         );
 

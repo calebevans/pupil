@@ -273,16 +273,18 @@ pub async fn execute(args: BuildArgs) -> Result<(), CliError> {
         ollama_container_id = Some(ollama_id);
     }
 
-    // Create and initialize the data volume
     let data_volume_name = format!("pupil-build-{}-data", config.name);
-    create_data_volume(runtime.as_ref(), &data_volume_name).await?;
 
     // Build environment variables
     let mut build_env = HashMap::new();
 
-    // Primary LLM API key
-    let api_key_value = std::env::var(&key_name).unwrap_or_default();
-    build_env.insert(key_name.clone(), api_key_value);
+    // Primary LLM API key (for Vertex, auto-resolve token, project, and location)
+    if key_name == "VERTEX_API_KEY" {
+        crate::agent_config::resolve_vertex_env(&mut build_env);
+    } else {
+        let api_key_value = std::env::var(&key_name).unwrap_or_default();
+        build_env.insert(key_name.clone(), api_key_value);
+    }
 
     // Pass through additional API keys (embedding providers may need these)
     for var in &["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] {
@@ -297,7 +299,6 @@ pub async fn execute(args: BuildArgs) -> Result<(), CliError> {
     for var in &[
         "VERTEX_PROJECT_ID",
         "VERTEX_LOCATION",
-        "VERTEX_API_KEY",
         "GOOGLE_APPLICATION_CREDENTIALS",
         "GOOGLE_API_KEY",
         "AWS_ACCESS_KEY_ID",
@@ -353,17 +354,46 @@ pub async fn execute(args: BuildArgs) -> Result<(), CliError> {
         "RECALLD_EMBEDDING_DIMENSIONS".to_string(),
         "768".to_string(),
     );
+    build_env.insert(
+        "RECALLD_STORAGE_DATA_DIR".to_string(),
+        "/data/recalld".to_string(),
+    );
+    build_env.insert(
+        "RECALLD_DAEMON_SOCKET".to_string(),
+        "/data/recalld/recalld.sock".to_string(),
+    );
     build_env.insert("PUPIL_LOG_FORMAT".to_string(), "json".to_string());
 
+    // Mount GCP credentials for auto-refresh if available
+    let gcp_creds_path = dirs::home_dir()
+        .map(|h| h.join(".config/gcloud/application_default_credentials.json"));
+    if let Some(ref creds) = gcp_creds_path {
+        if creds.exists() {
+            build_env.insert(
+                "GOOGLE_APPLICATION_CREDENTIALS".to_string(),
+                "/tmp/gcp-credentials.json".to_string(),
+            );
+        }
+    }
+
     // Build volumes list
+    // /data is NOT volume-mounted so that docker commit captures the learned data.
     let mut volumes = vec![
-        format!("{}:/data", data_volume_name),
         format!("{}:/curriculum:ro", curriculum_dir.to_string_lossy()),
         format!(
             "{}:/tmp/pupil.yaml:ro",
             agent_dir.join("pupil.yaml").to_string_lossy()
         ),
     ];
+
+    if let Some(ref creds) = gcp_creds_path {
+        if creds.exists() {
+            volumes.push(format!(
+                "{}:/tmp/gcp-credentials.json:ro",
+                creds.to_string_lossy()
+            ));
+        }
+    }
 
     if let Some(ref self_test) = config.build.self_test {
         let test_file = agent_dir.join(&self_test.file);
@@ -378,6 +408,11 @@ pub async fn execute(args: BuildArgs) -> Result<(), CliError> {
     // Build uses `docker run` (not exec) so output goes to docker logs.
     // Each step runs as the container's main process, making logs visible
     // via `docker logs <name>` from another terminal.
+    let uses_vertex = learning_model.starts_with("vertex/")
+        || config.build.self_test.as_ref()
+            .and_then(|st| st.judge_model.as_deref())
+            .map_or(false, |m| m.starts_with("vertex/"));
+
     let build_env_vec: Vec<String> = build_env
         .iter()
         .flat_map(|(k, v)| vec!["-e".to_string(), format!("{}={}", k, v)])
@@ -452,6 +487,9 @@ pub async fn execute(args: BuildArgs) -> Result<(), CliError> {
         "--name".to_string(),
         learn_container_name.clone(),
     ];
+    if uses_vertex {
+        refresh_vertex_token(&mut base_run_args);
+    }
     learn_run_args.extend(base_run_args.clone());
     learn_run_args.push(BASE_IMAGE.to_string());
     learn_run_args.push("--config".to_string());
@@ -528,6 +566,9 @@ pub async fn execute(args: BuildArgs) -> Result<(), CliError> {
                 .as_ref()
                 .and_then(|st| st.judge_model.as_deref());
 
+            if uses_vertex {
+                refresh_vertex_token(&mut base_run_args);
+            }
             let test_result = run_self_test_in_container(
                 runtime.as_ref(),
                 &base_run_args,
@@ -622,6 +663,9 @@ pub async fn execute(args: BuildArgs) -> Result<(), CliError> {
             }
 
             // Phase 5c: Remedial learning (test questions are NOT in the prompt)
+            if uses_vertex {
+                refresh_vertex_token(&mut base_run_args);
+            }
             if let Err(e) = run_remedial_learning(
                 runtime.as_ref(),
                 &base_run_args,
@@ -1366,4 +1410,20 @@ fn format_number(n: u64) -> String {
 
 fn uuid_short() -> String {
     uuid::Uuid::new_v4().to_string()[..8].to_string()
+}
+
+fn refresh_vertex_token(args: &mut Vec<String>) {
+    let token = match crate::agent_config::resolve_vertex_key() {
+        Some(t) => t,
+        None => return,
+    };
+    let prefix = "VERTEX_API_KEY=";
+    for arg in args.iter_mut() {
+        if arg.starts_with(prefix) {
+            *arg = format!("{}{}", prefix, token);
+            return;
+        }
+    }
+    args.push("-e".to_string());
+    args.push(format!("{}{}", prefix, token));
 }

@@ -71,6 +71,9 @@ pub struct AgentConfig {
 
     #[serde(default)]
     pub collaboration: Option<CollaborationConfig>,
+
+    #[serde(default)]
+    pub retrieval_planning: Option<RetrievalPlanningConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -119,6 +122,9 @@ pub struct CurriculumConfig {
 
     #[serde(default)]
     pub learning_profile: Option<String>,
+
+    #[serde(default)]
+    pub max_section_chars: Option<usize>,
 
     #[serde(default)]
     pub sync: Option<SyncConfig>,
@@ -489,6 +495,29 @@ fn default_collab_timeout() -> u64 {
     120
 }
 fn default_max_calls_per_turn() -> u32 {
+    10
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RetrievalPlanningConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    #[serde(default = "default_max_queries")]
+    pub max_queries: u32,
+
+    #[serde(default = "default_results_per_query")]
+    pub results_per_query: u32,
+
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+fn default_max_queries() -> u32 {
+    5
+}
+
+fn default_results_per_query() -> u32 {
     10
 }
 
@@ -876,7 +905,7 @@ mcp_servers:
     args: ["mcp"]
     required: true
     env:
-      RECALLD_DATA_DIR: /data/recalld
+      RECALLD_STORAGE_DATA_DIR: /data/recalld
 curriculum:
   namespace: knowledge
   decay: 0.0

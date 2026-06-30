@@ -44,8 +44,16 @@ pub async fn execute(args: RunArgs) -> Result<(), CliError> {
     }
 
     let mut env_vars: HashMap<String, String> = HashMap::new();
-    let api_key_value = std::env::var(&key_name).unwrap_or_default();
-    env_vars.insert(key_name.clone(), api_key_value);
+
+    if key_name == "VERTEX_API_KEY" {
+        crate::agent_config::resolve_vertex_env(&mut env_vars);
+    } else {
+        let api_key_value = std::env::var(&key_name).unwrap_or_default();
+        env_vars.insert(key_name.clone(), api_key_value);
+    }
+
+    env_vars.insert("RECALLD_STORAGE_DATA_DIR".to_string(), "/data/recalld".to_string());
+    env_vars.insert("RECALLD_DAEMON_SOCKET".to_string(), "/data/recalld/recalld.sock".to_string());
 
     for env_str in &args.env {
         let (k, v) = env_str.split_once('=').ok_or_else(|| CliError::ConfigInvalid {

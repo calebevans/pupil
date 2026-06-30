@@ -66,6 +66,10 @@ impl ConversationManager {
         self.messages.push(Message::user(content));
     }
 
+    pub fn push_context(&mut self, content: &str) {
+        self.messages.push(Message::user(content));
+    }
+
     pub fn push_assistant(&mut self, response: &ChatResponse) {
         self.messages.push(Message::assistant_with_tool_calls(
             response.content.clone(),

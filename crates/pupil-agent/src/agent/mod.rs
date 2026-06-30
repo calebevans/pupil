@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 use std::time::Instant;
@@ -11,7 +12,8 @@ use crate::collaboration::{AgentCaller, AgentRegistryEntry};
 use crate::config::AgentConfig;
 use crate::conversation::ConversationManager;
 use crate::llm::{
-    ChatConfig, LlmProvider, ResponseSchema, StopReason, ToolCall, ToolDefinition, ToolResult,
+    ChatConfig, LlmProvider, Message, ResponseSchema, StopReason, TokenUsage, ToolCall,
+    ToolDefinition, ToolResult,
 };
 use crate::mcp::McpManager;
 use crate::prompt::{PeerAgent, SystemPromptBuilder};
@@ -38,6 +40,87 @@ pub enum AgentError {
 
     #[error("Agent shutdown requested")]
     Shutdown,
+}
+
+#[derive(Debug)]
+struct RetrievalResult {
+    id: String,
+    summary: String,
+    full_text: Option<String>,
+}
+
+struct RetrievalPlanningOutput {
+    results: Vec<RetrievalResult>,
+    usage: TokenUsage,
+}
+
+fn humanize_recall_result(raw_json: &str) -> String {
+    let parsed: serde_json::Value = match serde_json::from_str(raw_json) {
+        Ok(v) => v,
+        Err(_) => return raw_json.to_string(),
+    };
+
+    let memories = match parsed.get("memories").and_then(|m| m.as_array()) {
+        Some(m) => m,
+        None => return raw_json.to_string(),
+    };
+
+    if memories.is_empty() {
+        return "No memories found.".to_string();
+    }
+
+    let mut out = format!("Found {} memories:\n\n", memories.len());
+    for (i, mem) in memories.iter().enumerate() {
+        let summary = mem.get("summary").and_then(|s| s.as_str()).unwrap_or("");
+        let full_text = mem.get("fullText").and_then(|s| s.as_str());
+        let entities = mem.get("entities").and_then(|e| e.as_array());
+
+        out.push_str(&format!("[{}] {}\n", i + 1, summary));
+        if let Some(ft) = full_text {
+            if !ft.is_empty() {
+                out.push_str(&format!("    Details: {}\n", ft));
+            }
+        }
+        if let Some(ents) = entities {
+            let names: Vec<&str> = ents.iter().filter_map(|e| e.as_str()).collect();
+            if !names.is_empty() {
+                out.push_str(&format!("    People/entities: {}\n", names.join(", ")));
+            }
+        }
+        out.push('\n');
+    }
+
+    if let Some(graph) = parsed.get("graphContext") {
+        if let Some(neighbors) = graph.get("neighbors").and_then(|n| n.as_array()) {
+            if !neighbors.is_empty() {
+                out.push_str(&format!("Related memories ({}):\n", neighbors.len()));
+                for nb in neighbors.iter().take(5) {
+                    let summary = nb.get("summary").and_then(|s| s.as_str()).unwrap_or("");
+                    if !summary.is_empty() {
+                        out.push_str(&format!("  - {}\n", summary));
+                    }
+                }
+                out.push('\n');
+            }
+        }
+    }
+
+    out
+}
+
+fn format_retrieval_context(results: &[RetrievalResult]) -> String {
+    let mut out = String::from(
+        "The following knowledge was retrieved from memory to help \
+         answer the question. Use it if relevant.\n\n",
+    );
+    for (i, r) in results.iter().enumerate() {
+        out.push_str(&format!("{}. {}", i + 1, r.summary));
+        if let Some(ref full) = r.full_text {
+            out.push_str(&format!("\n   Detail: {}", full));
+        }
+        out.push('\n');
+    }
+    out
 }
 
 pub struct Agent {
@@ -220,6 +303,38 @@ impl Agent {
     }
 
     async fn handle_turn(&mut self) -> Result<()> {
+        let last_user_msg = self
+            .conversation
+            .messages()
+            .iter()
+            .rev()
+            .find_map(|m| match m {
+                Message::User { content } => Some(content.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        if !last_user_msg.is_empty() {
+            match self.run_retrieval_planning(&last_user_msg).await {
+                Ok(output) => {
+                    self.conversation
+                        .record_usage(output.usage.input_tokens, output.usage.output_tokens);
+
+                    if !output.results.is_empty() {
+                        tracing::info!(
+                            count = output.results.len(),
+                            "Retrieval planning surfaced memories"
+                        );
+                        let context = format_retrieval_context(&output.results);
+                        self.conversation.push_context(&context);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Retrieval planning failed, proceeding without");
+                }
+            }
+        }
+
         let mut iterations: u32 = 0;
         let mut malformed_retries: u32 = 0;
         let mut ask_agent_calls: u32 = 0;
@@ -395,8 +510,13 @@ impl Agent {
                     .await
                     {
                         Ok(Ok(result)) => {
-                            let result_text =
+                            let raw_text =
                                 crate::mcp::schema::tool_result_to_string(&result);
+                            let result_text = if call.name == "recall_memories" || call.name == "list_memories" {
+                                humanize_recall_result(&raw_text)
+                            } else {
+                                raw_text
+                            };
                             tracing::info!(
                                 tool = %call.name,
                                 latency_ms = timer.elapsed().as_millis() as u64,
@@ -512,6 +632,153 @@ impl Agent {
                 })
             })
             .collect()
+    }
+
+    async fn run_retrieval_planning(
+        &self,
+        user_question: &str,
+    ) -> Result<RetrievalPlanningOutput> {
+        let planning_config = match &self.config.retrieval_planning {
+            Some(c) if c.enabled => c,
+            _ => {
+                return Ok(RetrievalPlanningOutput {
+                    results: Vec::new(),
+                    usage: TokenUsage::default(),
+                })
+            }
+        };
+
+        let max_queries = planning_config.max_queries.clamp(2, 10);
+
+        let planning_prompt = format!(
+            "Given a user question, generate a search plan for a memory system.\n\n\
+             Return a JSON object with:\n\
+             - \"queries\": array of 1-{max} search query strings, each targeting a single fact or entity\n\
+             - \"entities\": array of ALL proper nouns (people, places, organizations) in the question\n\
+             - \"topics\": array of 1-3 lowercase topic keywords relevant to the question\n\n\
+             For relationship chains (\"Who is the X of the Y of Z?\"), create a query for \
+             each person in the chain. Each query should search for one person's relationships.\n\n\
+             User question: {question}\n\n\
+             JSON only:",
+            max = max_queries,
+            question = user_question,
+        );
+
+        let model = planning_config
+            .model
+            .as_deref()
+            .unwrap_or(&self.config.model);
+        let plan_config = ChatConfig::new(model)
+            .with_temperature(0.0)
+            .with_max_tokens(512);
+
+        let messages = &[
+            Message::system("You are a search query planner."),
+            Message::user(&planning_prompt),
+        ];
+        let response = self.llm.chat(messages, &[], &plan_config).await?;
+        let usage = response.usage.clone();
+
+        #[derive(serde::Deserialize)]
+        struct SearchPlan {
+            #[serde(default)]
+            queries: Vec<String>,
+            #[serde(default)]
+            entities: Vec<String>,
+            #[serde(default)]
+            topics: Vec<String>,
+        }
+
+        let plan: SearchPlan = serde_json::from_str(&response.content)
+            .unwrap_or_else(|_| {
+                let queries: Vec<String> = serde_json::from_str(&response.content)
+                    .unwrap_or_else(|_| vec![user_question.to_string()]);
+                SearchPlan { queries, entities: vec![], topics: vec![] }
+            });
+
+        let queries: Vec<String> = plan.queries
+            .into_iter()
+            .take(max_queries as usize)
+            .collect();
+        let entities = plan.entities;
+        let topics = plan.topics;
+
+        let namespace = self
+            .config
+            .curriculum
+            .as_ref()
+            .map(|c| c.namespace.clone())
+            .unwrap_or_else(|| "knowledge".to_string());
+
+        let handles: Vec<_> = queries
+            .iter()
+            .map(|query| {
+                let manager = Arc::clone(&self.mcp_manager);
+                let ns = namespace.clone();
+                let q = query.clone();
+                let ents = entities.clone();
+                let tops = topics.clone();
+                let limit = planning_config.results_per_query;
+                tokio::spawn(async move {
+                    let mut args = serde_json::json!({
+                        "query": q,
+                        "namespace": ns,
+                        "limit": limit,
+                        "depth": 2,
+                        "compact": false,
+                    });
+                    if !ents.is_empty() {
+                        args["entities"] = serde_json::json!(ents);
+                    }
+                    if !tops.is_empty() {
+                        args["topics"] = serde_json::json!(tops);
+                    }
+                    let args_map = args.as_object().cloned();
+                    manager.call_tool("recall_memories", args_map).await
+                })
+            })
+            .collect();
+
+        let raw_results = futures::future::join_all(handles).await;
+
+        let mut seen_ids: HashSet<String> = HashSet::new();
+        let mut results: Vec<RetrievalResult> = Vec::new();
+
+        for join_result in raw_results {
+            let Ok(Ok(tool_result)) = join_result else {
+                continue;
+            };
+            let text = crate::mcp::schema::tool_result_to_string(&tool_result);
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(memories) = parsed.as_array() {
+                    for mem in memories {
+                        let id = mem
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if !id.is_empty() && seen_ids.insert(id.clone()) {
+                            let summary = mem
+                                .get("summary")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let full_text = mem
+                                .get("fullText")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            results.push(RetrievalResult {
+                                id,
+                                summary,
+                                full_text,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(RetrievalPlanningOutput { results, usage })
     }
 
     pub async fn run_single_query(&mut self, query: &str) -> Result<String> {

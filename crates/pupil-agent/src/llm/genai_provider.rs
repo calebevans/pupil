@@ -22,12 +22,68 @@ pub struct GenaiProvider {
 
 impl GenaiProvider {
     pub fn new(model_name: impl Into<String>) -> Result<Self, LlmError> {
-        let client = GenaiClient::builder().build();
+        let name = model_name.into();
+        let is_vertex = name.starts_with("vertex::");
+
+        let mut builder = GenaiClient::builder();
+
+        if is_vertex {
+            if let Some(resolver) = build_gcp_auth_resolver() {
+                builder = builder.with_auth_resolver(resolver);
+            }
+        }
+
+        let client = builder.build();
         Ok(Self {
             client,
-            model_name: model_name.into(),
+            model_name: name,
         })
     }
+}
+
+fn build_gcp_auth_resolver() -> Option<genai::resolver::AuthResolver> {
+    use genai::resolver::{AuthData, AuthResolver};
+
+    let provider = match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            let result = std::thread::spawn(move || {
+                handle.block_on(gcp_auth::provider())
+            }).join().ok()?;
+            match result {
+                Ok(p) => std::sync::Arc::new(p),
+                Err(e) => {
+                    tracing::debug!(error = %e, "gcp_auth provider not available, falling back to VERTEX_API_KEY");
+                    return None;
+                }
+            }
+        }
+        Err(_) => return None,
+    };
+
+    let scopes = vec!["https://www.googleapis.com/auth/cloud-platform"];
+
+    Some(AuthResolver::from_resolver_fn(
+        move |model_iden: genai::ModelIden| -> Result<Option<AuthData>, genai::resolver::Error> {
+            if model_iden.adapter_kind != genai::adapter::AdapterKind::Vertex {
+                return Ok(None);
+            }
+
+            let provider = provider.clone();
+            let scopes = scopes.clone();
+            let handle = tokio::runtime::Handle::current();
+
+            let token = std::thread::spawn(move || {
+                handle.block_on(async {
+                    provider.token(&scopes).await
+                })
+            })
+            .join()
+            .map_err(|_| genai::resolver::Error::Custom("Token thread panicked".to_string()))?
+            .map_err(|e| genai::resolver::Error::Custom(format!("gcp_auth token error: {e}")))?;
+
+            Ok(Some(AuthData::from_single(token.as_str().to_string())))
+        },
+    ))
 }
 
 fn build_chat_request(messages: &[Message]) -> GenaiChatRequest {

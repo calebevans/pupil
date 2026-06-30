@@ -91,6 +91,8 @@ pub struct McpServerEntry {
     pub required: bool,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub tools: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -259,14 +261,76 @@ pub fn resolve_api_key(model: &str) -> (String, bool) {
     } else if model.starts_with("bedrock/") {
         "AWS_ACCESS_KEY_ID"
     } else if model.starts_with("vertex/") {
-        "VERTEX_API_KEY"
+        return ("VERTEX_API_KEY".to_string(), resolve_vertex_key().is_some());
     } else if model.starts_with("azure/") {
         "AZURE_OPENAI_API_KEY"
+    } else if model.starts_with("openai-compat:") {
+        return ("OPENAI_API_KEY".to_string(), true);
     } else {
         "OPENAI_API_KEY"
     };
     let is_set = std::env::var(key_name).is_ok();
     (key_name.to_string(), is_set)
+}
+
+/// Get a Vertex API key. Checks the env var first, then falls back to
+/// `gcloud auth print-access-token`. Returns None if neither is available.
+pub fn resolve_vertex_key() -> Option<String> {
+    if let Ok(key) = std::env::var("VERTEX_API_KEY") {
+        if !key.is_empty() {
+            return Some(key);
+        }
+    }
+    gcloud_access_token()
+}
+
+/// Get a fresh access token from the gcloud CLI. Called each time a
+/// container needs credentials so tokens don't expire mid-build.
+pub fn gcloud_access_token() -> Option<String> {
+    let output = std::process::Command::new("gcloud")
+        .args(["auth", "print-access-token"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if token.is_empty() {
+        return None;
+    }
+    tracing::debug!("Obtained fresh Vertex API token from gcloud CLI");
+    Some(token)
+}
+
+/// Resolve Vertex project ID and location from env vars or gcloud config.
+/// Injects them into the provided env map.
+pub fn resolve_vertex_env(env: &mut std::collections::HashMap<String, String>) {
+    if let Some(token) = resolve_vertex_key() {
+        env.insert("VERTEX_API_KEY".to_string(), token);
+    }
+
+    if std::env::var("VERTEX_PROJECT_ID").is_err() {
+        if let Ok(output) = std::process::Command::new("gcloud")
+            .args(["config", "get-value", "project"])
+            .output()
+        {
+            if output.status.success() {
+                let project = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !project.is_empty() {
+                    env.insert("VERTEX_PROJECT_ID".to_string(), project);
+                }
+            }
+        }
+    } else {
+        env.insert(
+            "VERTEX_PROJECT_ID".to_string(),
+            std::env::var("VERTEX_PROJECT_ID").unwrap(),
+        );
+    }
+
+    let location = std::env::var("VERTEX_LOCATION")
+        .unwrap_or_else(|_| "us-central1".to_string());
+    env.insert("VERTEX_LOCATION".to_string(), location);
 }
 
 pub fn resolve_agent(name: Option<&str>) -> Result<(PathBuf, AgentConfig), CliError> {

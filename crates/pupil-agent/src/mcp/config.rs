@@ -36,6 +36,16 @@ pub struct McpServerConfig {
 
     #[serde(default)]
     pub required: bool,
+
+    #[serde(default)]
+    pub tools: Option<HashMap<String, ToolFilter>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolFilter {
+    All(String),
+    List(Vec<String>),
 }
 
 static ENV_VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -132,7 +142,7 @@ mod tests {
     #[test]
     fn test_substitute_no_vars() {
         let result =
-            substitute_env_vars("/data/recalld", "recalld", "RECALLD_DATA_DIR", true).unwrap();
+            substitute_env_vars("/data/recalld", "recalld", "RECALLD_STORAGE_DATA_DIR", true).unwrap();
         assert_eq!(result, "/data/recalld");
     }
 
@@ -204,6 +214,7 @@ mod tests {
                 args: vec![],
                 env: HashMap::new(),
                 required: true,
+                tools: None,
             },
         );
         let errors = validate_configs(&configs);
@@ -223,6 +234,7 @@ mod tests {
                 args: vec![],
                 env: HashMap::new(),
                 required: false,
+                tools: None,
             },
         );
         let errors = validate_configs(&configs);
@@ -242,12 +254,13 @@ mod tests {
                 env: {
                     let mut m = HashMap::new();
                     m.insert(
-                        "RECALLD_DATA_DIR".to_string(),
+                        "RECALLD_STORAGE_DATA_DIR".to_string(),
                         "/data/recalld".to_string(),
                     );
                     m
                 },
                 required: true,
+                tools: None,
             },
         );
         let errors = validate_configs(&configs);
@@ -267,6 +280,7 @@ mod tests {
                 m
             },
             required: true,
+                tools: None,
         };
         let resolved = resolve_env(&config, "test_server").unwrap();
         assert_eq!(resolved.get("API_KEY").unwrap(), "resolved_value");
@@ -282,7 +296,7 @@ recalld:
   args: ["mcp"]
   required: true
   env:
-    RECALLD_DATA_DIR: /data/recalld
+    RECALLD_STORAGE_DATA_DIR: /data/recalld
 web_search:
   command: /usr/local/bin/web-search-mcp
   args: []
