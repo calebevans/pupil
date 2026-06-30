@@ -1,0 +1,7 @@
+The curriculum files in this directory are generated from the PhantomWiki
+dataset (kilian-group/phantom-wiki-v1) by Gong et al.
+
+Paper: "PhantomWiki: On-Demand Datasets for Reasoning and Retrieval Evaluation"
+Published at ICML 2025.
+https://arxiv.org/abs/2502.20377
+https://github.com/kilian-group/phantom-wiki

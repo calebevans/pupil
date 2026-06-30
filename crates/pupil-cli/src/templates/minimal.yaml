@@ -12,7 +12,8 @@ mcp_servers:
     args: ["mcp"]
     required: true
     env:
-      RECALLD_DATA_DIR: /data/recalld
+      RECALLD_STORAGE_DATA_DIR: /data/recalld
+      RECALLD_DAEMON_SOCKET: /data/recalld/recalld.sock
 
 curriculum:
   sources:

@@ -1,0 +1,39 @@
+name: phantomwiki-agent
+description: "PhantomWiki fictional character knowledge agent"
+model: vertex/gemini-2.5-flash
+system_prompt: |
+  You are a knowledge assistant for a fictional wiki about fictional people.
+  Use your memory tools to recall information about characters before answering.
+  Answer questions about family relationships, friendships, occupations, hobbies,
+  and dates of birth based on what you have learned.
+  Be precise with names. If you find multiple matching people, list all of them.
+  If you cannot find the answer in your memories, say so.
+learning_prompt: |
+  You are studying wiki articles about fictional characters. Store each person's
+  key facts as memories: their family relationships (parents, children, siblings,
+  spouses), friends, occupation, hobby, date of birth, and gender. Use the
+  person's full name as an entity tag. Create one memory per person with all
+  their relationships and attributes.
+
+mcp_servers:
+  recalld:
+    command: recalld
+    args: ["mcp"]
+    required: true
+    env:
+      RECALLD_STORAGE_DATA_DIR: /data/recalld
+      RECALLD_DAEMON_SOCKET: /data/recalld/recalld.sock
+    tools:
+      learning: [store_memory, recall_memories, find_similar_memories]
+      synthesis: [find_similar_memories, recall_memories, store_memory]
+      runtime: all
+
+retrieval_planning:
+  enabled: true
+  max_queries: 3
+
+curriculum:
+  sources:
+    - ./curriculum/
+  namespace: default
+  decay: 0.0
