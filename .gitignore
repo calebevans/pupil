@@ -28,7 +28,10 @@ Cargo.lock
 # Pupil runtime artifacts
 .pupil-manifest.json
 /data/
-/test-agent/.pupil-manifest.json
+
+# Generated example data (downloaded via setup scripts)
+/examples/phantomwiki-agent/curriculum/
+/examples/phantomwiki-agent/benchmark/
 
 # Test artifacts
 *.junit.xml

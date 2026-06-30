@@ -48,7 +48,8 @@ COPY . .
 
 RUN RUST_TARGET=$(cat /tmp/rust-target) && \
     cargo build --release --target $RUST_TARGET -p pupil-agent && \
-    cp target/$RUST_TARGET/release/pupil-agent /usr/local/bin/pupil-agent
+    cp target/$RUST_TARGET/release/pupil-agent /usr/local/bin/pupil-agent && \
+    mkdir -p /empty-data/recalld /empty-data/sessions /empty-data/usage
 
 # ============================================================================
 # Stage 2: Runtime -- minimal distroless image
@@ -63,14 +64,18 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /usr/local/bin/pupil-agent /usr/local/bin/pupil-agent
 COPY --from=recalld-builder /usr/local/bin/recalld /usr/local/bin/recalld
+COPY --from=builder --chown=65532:65532 /empty-data/ /data/
 
-# /data is the only writable directory at runtime. It holds:
+# /data is the writable directory at runtime. It holds:
 # - /data/recalld/     -- recalld SQLite database + WAL files
 # - /data/sessions/    -- conversation session state (JSON files)
 # - /data/usage/       -- daily JSONL usage logs
 # - /data/audit/       -- daily JSONL audit logs (opt-in)
 # - /data/.pupil-manifest.json -- build manifest
-VOLUME /data
+#
+# No VOLUME declaration: docker commit must capture /data
+# so that learned knowledge is baked into the image.
+# Owned by UID 65532 (nonroot) so the agent can write at runtime.
 
 # The agent binary serves as the entrypoint. Mode is determined by flags:
 # - (no flags): interactive stdin/stdout chat
